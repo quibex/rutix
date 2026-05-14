@@ -109,7 +109,14 @@ async def test_parse_eat_with_current_items_prefixes_explicit_state(claude, fake
     )
 
     current = [
-        {"name": "Котлета", "kcal": 392, "protein": 26, "fat": 19, "carbs": 30, "source": "reference"}
+        {
+            "name": "Котлета",
+            "kcal": 392,
+            "protein": 26,
+            "fat": 19,
+            "carbs": 30,
+            "source": "reference",
+        }
     ]
     await claude.parse_eat("ещё чиабатта", reference_md="", current_items=current)
 
@@ -149,6 +156,38 @@ async def test_parse_eat_raises_on_missing_items_key(claude, fake_anthropic):
 
     with pytest.raises(ValueError, match="missing 'items'"):
         await claude.parse_eat("eggs", reference_md="")
+
+
+async def test_parse_eat_strips_markdown_fences(claude, fake_anthropic):
+    """Defense-in-depth: even with output_config.format, model occasionally wraps
+    JSON in ```json fences. Strip them before json.loads."""
+    payload = {
+        "items": [
+            {"name": "X", "kcal": 100, "protein": 0, "fat": 0, "carbs": 0, "source": "estimate"}
+        ]
+    }
+    raw_with_fence = "```json\n" + json.dumps(payload) + "\n```"
+    msg = MagicMock(content=[_text_block(raw_with_fence)])
+    fake_anthropic.messages.create.return_value = msg
+
+    items = await claude.parse_eat("x", reference_md="")
+    assert len(items) == 1
+    assert items[0].name == "X"
+
+
+async def test_parse_eat_request_includes_json_schema(claude, fake_anthropic):
+    """The API call must include output_config.format with json_schema —
+    this is what enforces no-markdown-wrapping at the API layer."""
+    payload = {"items": []}
+    fake_anthropic.messages.create.return_value = MagicMock(
+        content=[_text_block(json.dumps(payload))]
+    )
+    await claude.parse_eat("x", reference_md="")
+
+    output_config = fake_anthropic.messages.create.call_args.kwargs["output_config"]
+    assert "format" in output_config
+    assert output_config["format"]["type"] == "json_schema"
+    assert "items" in output_config["format"]["schema"]["properties"]
 
 
 async def test_parse_eat_filters_out_thinking_blocks(claude, fake_anthropic):

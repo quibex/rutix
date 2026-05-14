@@ -1,8 +1,12 @@
 """Anthropic Claude API client — used by /eat to parse free-form food text.
 
 Uses adaptive thinking (Sonnet 4.6+) so the model reasons about whether each
-user-named item belongs to the reference or needs an estimate, without us
-hardcoding a thinking budget.
+user-named item belongs to the reference or needs an estimate.
+
+JSON output is enforced via Anthropic's structured outputs feature
+(`output_config.format` with json_schema). This is a hard, API-level
+constraint — unlike soft prompt instructions ("return JSON only"), which
+the model has been observed to ignore by wrapping JSON in ```json fences.
 
 Reference markdown is cached as part of the system prompt (5-min ephemeral
 TTL, auto-extends on use) — for ~3KB of reference, this saves ~90% on input
@@ -11,6 +15,7 @@ tokens for repeated /eat calls within the cache window.
 
 import json
 import logging
+import re
 from pathlib import Path
 
 from anthropic import AsyncAnthropic
@@ -21,6 +26,51 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
 DEFAULT_MAX_TOKENS = 16000  # adaptive thinking + multimodal can use a lot of tokens
+
+# JSON schema for /eat parser output. The Anthropic API enforces this at the
+# response layer when passed via output_config.format — model is forced to
+# emit valid JSON matching this shape (no markdown wrapping, no extra fields).
+EAT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Название блюда с уточнениями"},
+                    "kcal": {"type": "integer", "description": "Калорий"},
+                    "protein": {"type": "number", "description": "Белков, г"},
+                    "fat": {"type": "number", "description": "Жиров, г"},
+                    "carbs": {"type": "number", "description": "Углеводов, г"},
+                    "source": {
+                        "type": "string",
+                        "enum": ["reference", "estimate"],
+                        "description": (
+                            "reference — взято из справочника; estimate — оценка модели"
+                        ),
+                    },
+                },
+                "required": ["name", "kcal", "protein", "fat", "carbs", "source"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["items"],
+    "additionalProperties": False,
+}
+
+
+def _strip_markdown_fences(raw: str) -> str:
+    """Defense-in-depth: even with output_config.format enforcement, occasionally
+    a model can wrap JSON in ```json fences. Strip them if present.
+    """
+    raw = raw.strip()
+    # ```json\n{...}\n```  or  ```\n{...}\n```
+    m = re.match(r"^```(?:[a-zA-Z]+)?\s*\n(.*?)\n\s*```\s*$", raw, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    return raw
 
 
 class ClaudeClient:
@@ -49,14 +99,11 @@ class ClaudeClient:
         `current_items` is the list of already-parsed items from prior turns
         in the same session. When non-empty, it's prepended to the user message
         as a "ТЕКУЩИЙ СПИСОК:" block so Claude treats the new turn as an
-        update to that explicit state (rather than inferring from chat history).
-        This avoids the conversation-history ambiguity that was causing items
-        to silently disappear on follow-up turns.
+        update to that explicit state.
         """
         eat_prompt = (self.prompts_dir / "eat.md").read_text(encoding="utf-8")
 
         # Stable system prompt — eligible for prompt caching (Sonnet 4.6 min 2048 tok).
-        # Reference rarely changes, so most /eat calls hit the cache.
         system_blocks = [
             {
                 "type": "text",
@@ -78,7 +125,6 @@ class ClaudeClient:
         if isinstance(new_input, str):
             user_content = (state_prefix + new_input) if state_prefix else new_input
         else:
-            # Multimodal: prepend state prefix as a text block before image blocks
             user_content = (
                 ([{"type": "text", "text": state_prefix}] + new_input)
                 if state_prefix
@@ -89,13 +135,15 @@ class ClaudeClient:
             model=self.model,
             max_tokens=DEFAULT_MAX_TOKENS,
             thinking={"type": "adaptive"},
-            output_config={"effort": "high"},
+            output_config={
+                "effort": "high",
+                "format": {"type": "json_schema", "schema": EAT_SCHEMA},
+            },
             system=system_blocks,
             messages=[{"role": "user", "content": user_content}],
         )
 
         # With adaptive thinking, response.content interleaves thinking + text blocks.
-        # We only want the final text block(s).
         text_blocks = [b.text for b in response.content if b.type == "text"]
         raw = "\n".join(text_blocks).strip()
 
@@ -114,6 +162,10 @@ class ClaudeClient:
             raise ValueError(
                 f"модель не вернула текст (stop_reason={stop_reason}). Попробуйте ещё раз."
             )
+
+        # Defense in depth: strip any markdown wrapping the model might have
+        # produced despite output_config.format. Should be a no-op in normal cases.
+        raw = _strip_markdown_fences(raw)
 
         try:
             payload = json.loads(raw)
