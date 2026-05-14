@@ -1,0 +1,122 @@
+name: Prod Pipeline
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  build-and-push:
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=prod-
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: prod
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy compose file to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          source: "docker-compose.prod.yml"
+          target: /opt/rutix
+          overwrite: true
+
+      - name: Deploy
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          script: |
+            set -e
+            cd /opt/rutix
+            mkdir -p data
+
+            # Write .env from individual secrets and variables
+            cat > .env << 'ENVEOF'
+            BOT_TOKEN=${{ secrets.BOT_TOKEN }}
+            TELEGRAM_USER_ID=${{ vars.TELEGRAM_USER_ID }}
+            ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
+            GITHUB_API_TOKEN=${{ secrets.GITHUB_API_TOKEN }}
+            LIFE_REPO=${{ vars.LIFE_REPO }}
+            TODOIST_TOKEN=${{ secrets.TODOIST_TOKEN }}
+            DATABASE_URL=sqlite+aiosqlite:///data/bot.db
+            TZ=${{ vars.TZ }}
+            ENVEOF
+            chmod 600 .env
+
+            # Rename compose file
+            mv -f docker-compose.prod.yml docker-compose.yml 2>/dev/null || true
+
+            # Login to GHCR and deploy
+            echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            docker compose pull bot
+            docker compose up -d --force-recreate
+
+            # Fail pipeline if bot container was not created
+            BOT_CID=$(docker compose ps -q bot)
+            if [ -z "$BOT_CID" ]; then
+              echo "Bot container was not created"
+              docker compose ps
+              docker compose logs --tail=200 bot || true
+              exit 1
+            fi
+
+            sleep 15
+            BOT_STATUS=$(docker inspect -f '{{.State.Status}}' "$BOT_CID")
+            BOT_RESTARTS=$(docker inspect -f '{{.RestartCount}}' "$BOT_CID")
+            if [ "$BOT_STATUS" != "running" ] || [ "$BOT_RESTARTS" -gt 0 ]; then
+              echo "Bot unhealthy after deploy: status=$BOT_STATUS restarts=$BOT_RESTARTS"
+              docker compose ps
+              docker compose logs --tail=200 bot || true
+              exit 1
+            fi
+
+            docker image prune -f
