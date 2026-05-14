@@ -1,6 +1,5 @@
 """Daily flush: SQLite mood/meds for a given day → row in mood_tracker.md."""
 import logging
-import re
 from datetime import date
 
 from sqlalchemy import select
@@ -13,11 +12,6 @@ from rutix.markdown.mood_tracker import DayRow, MedColumn, render_row, update_da
 logger = logging.getLogger(__name__)
 
 MOOD_TRACKER_PATH = "health/mood_tracker.md"
-
-
-def _row_cells(row_str: str) -> list[str]:
-    """Split a markdown table row into stripped, non-empty cell values."""
-    return [c.strip() for c in row_str.split("|") if c.strip()]
 
 
 async def flush_day(
@@ -80,14 +74,6 @@ async def flush_day(
     file = await github.read(MOOD_TRACKER_PATH)
     if file is None:
         raise RuntimeError(f"{MOOD_TRACKER_PATH} not found in repo")
-
-    # Row-level no-op check: compare meaningful (non-empty) cells only.
-    # This handles column-count mismatches between current schema and file.
-    existing_row_pattern = re.compile(rf"^\|\s*{day.day}\s*\|.*$", re.MULTILINE)
-    existing_match = existing_row_pattern.search(file.text)
-    if existing_match and _row_cells(existing_match.group(0)) == _row_cells(rendered):
-        logger.info("flush_day no-op — content unchanged for %s", day)
-        return None
 
     new_text = update_day_row(file.text, day.year, day.month, day.day, rendered)
     if new_text == file.text:

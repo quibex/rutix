@@ -80,17 +80,28 @@ async def test_flush_day_skips_if_no_mood_entry(session, fake_github):
 async def test_flush_day_no_op_if_content_unchanged(session, fake_github):
     """If the rendered row equals what's already in the file, skip the PUT."""
     # Pre-populate the markdown with the exact same row we're about to render
-    rendered = "| 13 | +1 | 7 |  | 0 | 0 |  |  |  | quiet |"
+    # (mood=1, sleep=7.0, anx=0, irr=0, seizar taken 25mg, gidr_kanon taken 12.5mg, notes=quiet)
+    rendered = "| 13 | +1 | 7 |  | 0 | 0 | ✓ 25 | ✓ 12.5 |  | quiet |"
     pre_filled = SAMPLE_TRACKER.replace(
         "| 13   |        |         |     |         |        |        |        |          |         |",
         rendered,
     )
     fake_github.read = AsyncMock(return_value=FileContent(text=pre_filled, sha="x"))
 
+    session.add(MedActive(
+        key="seizar", name="Сейзар", column_label="Сейзар",
+        current_dose="25", started_at=date(2026, 5, 1),
+    ))
+    session.add(MedActive(
+        key="gidr_kanon", name="Гидр.Канон", column_label="Гидр.К",
+        current_dose="12.5", started_at=date(2026, 5, 1),
+    ))
     session.add(MoodEntry(
         day=date(2026, 5, 13), mood=1, anxiety=0, irritability=0,
         sleep_hours=7.0, notes="quiet",
     ))
+    session.add(MedicationLog(day=date(2026, 5, 13), med_key="seizar", taken=True))
+    session.add(MedicationLog(day=date(2026, 5, 13), med_key="gidr_kanon", taken=True))
     await session.commit()
 
     sha = await flush_day(session, fake_github, date(2026, 5, 13))
