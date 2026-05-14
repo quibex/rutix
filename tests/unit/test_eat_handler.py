@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from rutix.bot.handlers.eat import _slot_for_time, cmd_eat
+from rutix.bot.handlers.eat import _slot_for_time, cb_ok, cmd_eat
 from rutix.integrations.github import FileContent
 from rutix.markdown.daily import MealItem
 
@@ -70,62 +70,132 @@ def fake_claude():
 
 
 @pytest.fixture
+def fake_state():
+    """Mock FSMContext that records updates and clears."""
+    s = MagicMock()
+    s.update_data = AsyncMock()
+    s.set_state = AsyncMock()
+    s.get_data = AsyncMock(return_value={})
+    s.clear = AsyncMock()
+    return s
+
+
+@pytest.fixture
 def fake_message():
     m = MagicMock()
     m.text = "/eat шаурма"
     m.reply = AsyncMock()
-    m.answer = AsyncMock()
+
+    # answer() returns a "thinking" message that we then edit
+    thinking_msg = MagicMock()
+    thinking_msg.edit_text = AsyncMock()
+    m.answer = AsyncMock(return_value=thinking_msg)
+    m._thinking_msg = thinking_msg  # so tests can assert on the edit
     return m
 
 
-async def test_cmd_eat_writes_to_daily_and_replies(
-    fake_message, fake_github, fake_claude, fake_settings, monkeypatch
+async def test_cmd_eat_shows_preview_with_buttons_does_not_write(
+    fake_message, fake_state, fake_github, fake_claude, fake_settings
 ):
-    # Reference is fetched on first call
+    # 1st github.read = daily file existence check; 2nd = reference fetch
     fake_github.read.side_effect = [
-        FileContent(text="ref content", sha="rsha"),  # nutrition/reference.md
-        FileContent(text=DAILY, sha="dsha"),  # daily/<today>.md
+        FileContent(text=DAILY, sha="dsha"),
+        FileContent(text="ref content", sha="rsha"),
     ]
     fake_claude.parse_eat.return_value = [MealItem("", "Шаурма", 450, 22.0, 18.0, 45.0)]
-
     fake_message.text = "/eat шаурма"
 
-    await cmd_eat(fake_message, settings=fake_settings, github=fake_github, claude=fake_claude)
+    await cmd_eat(
+        fake_message,
+        state=fake_state,
+        settings=fake_settings,
+        github=fake_github,
+        claude=fake_claude,
+    )
 
-    # GitHub write called with updated Питание containing the row
-    write_args = fake_github.write.call_args
-    written_text = write_args.args[1]
+    # No write yet — preview shown, awaiting confirmation
+    fake_github.write.assert_not_called()
+
+    # Preview was shown via edit_text with confirm keyboard
+    fake_message._thinking_msg.edit_text.assert_awaited()
+    edit_kwargs = fake_message._thinking_msg.edit_text.call_args.kwargs
+    edit_args = fake_message._thinking_msg.edit_text.call_args.args
+    preview_text = edit_args[0]
+    assert "Шаурма" in preview_text
+    assert "450" in preview_text
+    assert "reply_markup" in edit_kwargs
+    # State has the items + history seeded
+    fake_state.update_data.assert_awaited()
+    saved = fake_state.update_data.call_args.kwargs
+    assert any(it["name"] == "Шаурма" for it in saved["items"])
+    assert len(saved["history"]) == 2  # user + assistant
+
+
+async def test_cb_ok_writes_to_daily(fake_state, fake_github, fake_settings):
+    fake_state.get_data = AsyncMock(
+        return_value={
+            "items": [{"name": "Шаурма", "kcal": 450, "protein": 22.0, "fat": 18.0, "carbs": 45.0}],
+            "slot": "Обед",
+            "day": "2026-05-15",
+            "food_text": "шаурма",
+        }
+    )
+    fake_github.read.return_value = FileContent(text=DAILY, sha="dsha")
+
+    cb = MagicMock()
+    cb.message = MagicMock()
+    cb.message.edit_text = AsyncMock()
+    cb.answer = AsyncMock()
+
+    await cb_ok(cb, state=fake_state, settings=fake_settings, github=fake_github)
+
+    # Wrote to daily file
+    fake_github.write.assert_awaited_once()
+    written_text = fake_github.write.call_args.args[1]
     assert "Шаурма" in written_text
     assert "450" in written_text
 
-    # Reply mentions added items + total
-    fake_message.answer.assert_awaited()
-    reply_text = fake_message.answer.call_args.args[0]
-    assert "Шаурма" in reply_text
-    assert "450" in reply_text
+    # Confirmation message
+    reply = cb.message.edit_text.call_args.args[0]
+    assert "✅" in reply or "Записал" in reply
 
 
 async def test_cmd_eat_replies_with_error_if_claude_fails(
-    fake_message, fake_github, fake_claude, fake_settings
+    fake_message, fake_state, fake_github, fake_claude, fake_settings
 ):
-    fake_github.read.return_value = FileContent(text="ref", sha="x")
+    fake_github.read.side_effect = [
+        FileContent(text=DAILY, sha="dsha"),
+        FileContent(text="ref", sha="x"),
+    ]
     fake_claude.parse_eat.side_effect = ValueError("bad json")
 
     fake_message.text = "/eat что-то непонятное"
 
-    await cmd_eat(fake_message, settings=fake_settings, github=fake_github, claude=fake_claude)
+    await cmd_eat(
+        fake_message,
+        state=fake_state,
+        settings=fake_settings,
+        github=fake_github,
+        claude=fake_claude,
+    )
 
     fake_github.write.assert_not_called()
-    reply_text = fake_message.answer.call_args.args[0]
+    reply_text = fake_message._thinking_msg.edit_text.call_args.args[0]
     assert "не получилось" in reply_text.lower() or "⚠️" in reply_text
 
 
 async def test_cmd_eat_replies_with_help_when_no_args(
-    fake_message, fake_github, fake_claude, fake_settings
+    fake_message, fake_state, fake_github, fake_claude, fake_settings
 ):
     fake_message.text = "/eat"
 
-    await cmd_eat(fake_message, settings=fake_settings, github=fake_github, claude=fake_claude)
+    await cmd_eat(
+        fake_message,
+        state=fake_state,
+        settings=fake_settings,
+        github=fake_github,
+        claude=fake_claude,
+    )
 
     fake_github.write.assert_not_called()
     fake_claude.parse_eat.assert_not_called()
