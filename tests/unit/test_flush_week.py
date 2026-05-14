@@ -25,7 +25,9 @@ HABITS_MD = """# Привычки
 """
 
 
-def _daily(name: str = "test", with_meals: bool = False, habits_done: list[str] | None = None) -> str:
+def _daily(
+    name: str = "test", with_meals: bool = False, habits_done: list[str] | None = None
+) -> str:
     habits_done = habits_done or []
     habit_lines = []
     for h in ("📚 Anki", "🥤 Protein", "🏋️ Strength"):
@@ -98,7 +100,9 @@ async def test_flush_week_writes_files_and_deletes_daily(session, fake_github):
     # Monday 2026-05-11 → flush W19 (Mon 5-04 .. Sun 5-10)
     week_days = [date(2026, 5, d) for d in range(4, 11)]
     daily_contents = {
-        f"daily/{d.isoformat()}.md": FileContent(text=_daily(str(d), with_meals=(i == 0), habits_done=["📚 Anki"]), sha=f"sha-{d}")
+        f"daily/{d.isoformat()}.md": FileContent(
+            text=_daily(str(d), with_meals=(i == 0), habits_done=["📚 Anki"]), sha=f"sha-{d}"
+        )
         for i, d in enumerate(week_days)
     }
     daily_contents["habits.md"] = FileContent(text=HABITS_MD, sha="habits-sha")
@@ -117,12 +121,16 @@ async def test_flush_week_writes_files_and_deletes_daily(session, fake_github):
     assert sha == "newsha"
 
     # Wrote weekly + nutrition
-    write_paths = [c.args[0] if c.args else c.kwargs["path"] for c in fake_github.write.call_args_list]
+    write_paths = [
+        c.args[0] if c.args else c.kwargs["path"] for c in fake_github.write.call_args_list
+    ]
     assert "weekly/2026-W19.md" in write_paths
     assert "nutrition/2026-W19.md" in write_paths
 
     # Deleted 7 daily files
-    delete_paths = [c.args[0] if c.args else c.kwargs["path"] for c in fake_github.delete.call_args_list]
+    delete_paths = [
+        c.args[0] if c.args else c.kwargs["path"] for c in fake_github.delete.call_args_list
+    ]
     for d in week_days:
         assert f"daily/{d.isoformat()}.md" in delete_paths
     assert len(delete_paths) == 7

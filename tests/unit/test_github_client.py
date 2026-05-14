@@ -18,11 +18,14 @@ def client():
 async def test_read_returns_decoded_text_and_sha(client):
     content = "hello world\n"
     respx.get("https://api.github.com/repos/quibex/life/contents/test.md").mock(
-        return_value=httpx.Response(200, json={
-            "content": base64.b64encode(content.encode()).decode(),
-            "sha": "abc123",
-            "encoding": "base64",
-        })
+        return_value=httpx.Response(
+            200,
+            json={
+                "content": base64.b64encode(content.encode()).decode(),
+                "sha": "abc123",
+                "encoding": "base64",
+            },
+        )
     )
     result = await client.read("test.md")
     assert result == FileContent(text="hello world\n", sha="abc123")

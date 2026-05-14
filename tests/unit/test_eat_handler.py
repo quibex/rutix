@@ -84,17 +84,13 @@ async def test_cmd_eat_writes_to_daily_and_replies(
     # Reference is fetched on first call
     fake_github.read.side_effect = [
         FileContent(text="ref content", sha="rsha"),  # nutrition/reference.md
-        FileContent(text=DAILY, sha="dsha"),           # daily/<today>.md
+        FileContent(text=DAILY, sha="dsha"),  # daily/<today>.md
     ]
-    fake_claude.parse_eat.return_value = [
-        MealItem("", "Шаурма", 450, 22.0, 18.0, 45.0)
-    ]
+    fake_claude.parse_eat.return_value = [MealItem("", "Шаурма", 450, 22.0, 18.0, 45.0)]
 
     fake_message.text = "/eat шаурма"
 
-    await cmd_eat(
-        fake_message, settings=fake_settings, github=fake_github, claude=fake_claude
-    )
+    await cmd_eat(fake_message, settings=fake_settings, github=fake_github, claude=fake_claude)
 
     # GitHub write called with updated Питание containing the row
     write_args = fake_github.write.call_args
@@ -117,9 +113,7 @@ async def test_cmd_eat_replies_with_error_if_claude_fails(
 
     fake_message.text = "/eat что-то непонятное"
 
-    await cmd_eat(
-        fake_message, settings=fake_settings, github=fake_github, claude=fake_claude
-    )
+    await cmd_eat(fake_message, settings=fake_settings, github=fake_github, claude=fake_claude)
 
     fake_github.write.assert_not_called()
     reply_text = fake_message.answer.call_args.args[0]
@@ -131,9 +125,7 @@ async def test_cmd_eat_replies_with_help_when_no_args(
 ):
     fake_message.text = "/eat"
 
-    await cmd_eat(
-        fake_message, settings=fake_settings, github=fake_github, claude=fake_claude
-    )
+    await cmd_eat(fake_message, settings=fake_settings, github=fake_github, claude=fake_claude)
 
     fake_github.write.assert_not_called()
     fake_claude.parse_eat.assert_not_called()

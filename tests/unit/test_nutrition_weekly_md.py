@@ -34,9 +34,12 @@ def test_render_with_one_day():
 def test_render_empty_day_shows_zeros_in_summary_only():
     days = [
         NutritionDay(date=date(2026, 5, 4), meals=[]),
-        NutritionDay(date=date(2026, 5, 5), meals=[
-            MealItem("Обед", "Плов", 400, 17.0, 12.0, 56.0),
-        ]),
+        NutritionDay(
+            date=date(2026, 5, 5),
+            meals=[
+                MealItem("Обед", "Плов", 400, 17.0, 12.0, 56.0),
+            ],
+        ),
     ]
     result = render_nutrition_weekly(year=2026, week_num=19, days=days)
     # Empty day shows zeros in the table
@@ -49,7 +52,7 @@ def test_render_empty_day_shows_zeros_in_summary_only():
 def test_render_avg_skips_zero_days():
     """Average should be over days with data (>= 1 meal), not all 7."""
     days = [
-        NutritionDay(date=date(2026, 5, 4), meals=[]),                 # 0 kcal
+        NutritionDay(date=date(2026, 5, 4), meals=[]),  # 0 kcal
         NutritionDay(date=date(2026, 5, 5), meals=[MealItem("Обед", "x", 1000, 0, 0, 0)]),
         NutritionDay(date=date(2026, 5, 6), meals=[MealItem("Обед", "y", 2000, 0, 0, 0)]),
     ]

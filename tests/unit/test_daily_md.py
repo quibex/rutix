@@ -63,6 +63,7 @@ SAMPLE = """# Четверг, 14 мая
 
 # --- append_note ---
 
+
 def test_append_note_adds_bullet_under_section():
     result = append_note(SAMPLE, "новая заметка")
     notes_block = result.split("## Заметки", 1)[1]
@@ -80,6 +81,7 @@ def test_append_note_when_section_only_has_empty_dash():
 
 # --- append_done ---
 
+
 def test_append_done_adds_bullet_under_section():
     result = append_done(SAMPLE, "сделал X")
     done_block = result.split("## Что сделано", 1)[1].split("## Заметки", 1)[0]
@@ -88,6 +90,7 @@ def test_append_done_adds_bullet_under_section():
 
 
 # --- update_habits_checked ---
+
 
 def test_update_habits_checked_marks_matching_habits():
     result = update_habits_checked(SAMPLE, done={"📚 Anki", "🥤 Протеин"})
@@ -109,10 +112,9 @@ def test_update_habits_no_change_when_done_set_empty():
 
 # --- append_meal + parse_meals + totals ---
 
+
 def test_append_meal_writes_row_and_recomputes_totals():
-    item = MealItem(
-        slot="Обед", name="Шаурма", kcal=450, protein=22.0, fat=18.0, carbs=45.0
-    )
+    item = MealItem(slot="Обед", name="Шаурма", kcal=450, protein=22.0, fat=18.0, carbs=45.0)
     result = append_meal(SAMPLE, item)
     food = result.split("## Питание", 1)[1].split("\n---\n", 1)[0]
     assert "| Обед | Шаурма | 450 | 22 | 18 | 45 |" in food
@@ -125,9 +127,7 @@ def test_append_meal_to_non_empty_table_sums_totals():
         "|  |  |  |  |  |  |\n| **Итого** |  |  |  |  |  |",
         "| Завтрак | Яйца | 200 | 14 | 14 | 2 |\n| **Итого** |  | **200** | **14** | **14** | **2** |",
     )
-    item = MealItem(
-        slot="Обед", name="Бургер", kcal=500, protein=20.0, fat=25.0, carbs=40.0
-    )
+    item = MealItem(slot="Обед", name="Бургер", kcal=500, protein=20.0, fat=25.0, carbs=40.0)
     result = append_meal(pre, item)
     food = result.split("## Питание", 1)[1].split("\n---\n", 1)[0]
     assert "| Завтрак | Яйца | 200 | 14 | 14 | 2 |" in food
@@ -140,9 +140,7 @@ def test_append_meal_omits_slot_label_if_same_as_previous_row():
         "|  |  |  |  |  |  |\n| **Итого** |  |  |  |  |  |",
         "| Обед | Плов | 400 | 17 | 12 | 56 |\n| **Итого** |  | **400** | **17** | **12** | **56** |",
     )
-    item = MealItem(
-        slot="Обед", name="Чиабатта", kcal=300, protein=10.0, fat=15.0, carbs=30.0
-    )
+    item = MealItem(slot="Обед", name="Чиабатта", kcal=300, protein=10.0, fat=15.0, carbs=30.0)
     result = append_meal(pre, item)
     food = result.split("## Питание", 1)[1].split("\n---\n", 1)[0]
     # Second Обед row should have empty slot column to mirror existing convention

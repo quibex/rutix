@@ -12,17 +12,23 @@ from rutix.integrations.github import FileContent
 
 @pytest.fixture
 def fake_settings():
-    s = MagicMock(); s.tz = "Europe/Moscow"; return s
+    s = MagicMock()
+    s.tz = "Europe/Moscow"
+    return s
 
 
 @pytest.fixture
 def fake_github():
-    g = MagicMock(); g.read = AsyncMock(); return g
+    g = MagicMock()
+    g.read = AsyncMock()
+    return g
 
 
 @pytest.fixture
 def fake_message():
-    m = MagicMock(); m.answer = AsyncMock(); return m
+    m = MagicMock()
+    m.answer = AsyncMock()
+    return m
 
 
 @freeze_time("2026-05-14 12:00:00", tz_offset=3)
@@ -37,14 +43,21 @@ async def test_cmd_week_shows_7_buttons(fake_message, fake_settings):
     callback_dates = [b.callback_data.split(":")[1] for b in flat]
     # Week 20 of 2026: Mon May 11 .. Sun May 17
     assert callback_dates == [
-        "2026-05-11", "2026-05-12", "2026-05-13", "2026-05-14",
-        "2026-05-15", "2026-05-16", "2026-05-17",
+        "2026-05-11",
+        "2026-05-12",
+        "2026-05-13",
+        "2026-05-14",
+        "2026-05-15",
+        "2026-05-16",
+        "2026-05-17",
     ]
 
 
 @freeze_time("2026-05-14 12:00:00", tz_offset=3)
 async def test_cb_week_day_replies_with_day_summary(
-    fake_settings, fake_github, session,
+    fake_settings,
+    fake_github,
+    session,
 ):
     session.add(MoodEntry(day=date(2026, 5, 13), mood=2, anxiety=0, irritability=1, sleep_hours=8))
     await session.commit()
@@ -60,9 +73,14 @@ async def test_cb_week_day_replies_with_day_summary(
 
     def session_factory_call():
         class CM:
-            async def __aenter__(self_inner): return session
-            async def __aexit__(self_inner, *a): pass
+            async def __aenter__(self_inner):
+                return session
+
+            async def __aexit__(self_inner, *a):
+                pass
+
         return CM()
+
     sf = MagicMock(side_effect=lambda: session_factory_call())
 
     await cb_week_day(cb, settings=fake_settings, github=fake_github, session_factory=sf)

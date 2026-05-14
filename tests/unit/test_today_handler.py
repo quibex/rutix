@@ -12,7 +12,9 @@ from rutix.integrations.github import FileContent
 
 @pytest.fixture
 def fake_settings():
-    s = MagicMock(); s.tz = "Europe/Moscow"; return s
+    s = MagicMock()
+    s.tz = "Europe/Moscow"
+    return s
 
 
 @pytest.fixture
@@ -24,14 +26,22 @@ def fake_github():
 
 @pytest.fixture
 def fake_message():
-    m = MagicMock(); m.answer = AsyncMock(); return m
+    m = MagicMock()
+    m.answer = AsyncMock()
+    return m
 
 
 @freeze_time("2026-05-14 12:00:00", tz_offset=3)
 async def test_today_shows_mood_and_meals(fake_message, fake_settings, fake_github, session):
-    session.add(MoodEntry(
-        day=date(2026, 5, 14), mood=1, anxiety=0, irritability=0, sleep_hours=7.5,
-    ))
+    session.add(
+        MoodEntry(
+            day=date(2026, 5, 14),
+            mood=1,
+            anxiety=0,
+            irritability=0,
+            sleep_hours=7.5,
+        )
+    )
     await session.commit()
 
     daily = """# x
@@ -54,9 +64,12 @@ async def test_today_shows_mood_and_meals(fake_message, fake_settings, fake_gith
         class CM:
             async def __aenter__(self_inner):
                 return session
+
             async def __aexit__(self_inner, *a):
                 pass
+
         return CM()
+
     sf = MagicMock(side_effect=lambda: session_factory_call())
 
     await cmd_today(
@@ -81,9 +94,12 @@ async def test_today_when_no_mood_entry(fake_message, fake_settings, fake_github
         class CM:
             async def __aenter__(self_inner):
                 return session
+
             async def __aexit__(self_inner, *a):
                 pass
+
         return CM()
+
     sf = MagicMock(side_effect=lambda: session_factory_call())
 
     await cmd_today(

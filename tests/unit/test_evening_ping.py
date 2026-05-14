@@ -32,7 +32,9 @@ def _session_factory(session):
 
 @freeze_time("2026-05-14 21:00:00", tz_offset=3)
 async def test_skips_when_mood_entry_with_value_exists(fake_bot, session):
-    session.add(MoodEntry(day=date(2026, 5, 14), mood=1, anxiety=0, irritability=0, sleep_hours=7.5))
+    session.add(
+        MoodEntry(day=date(2026, 5, 14), mood=1, anxiety=0, irritability=0, sleep_hours=7.5)
+    )
     await session.commit()
 
     sent = await send_evening_ping_if_needed(

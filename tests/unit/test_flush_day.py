@@ -27,17 +27,33 @@ def fake_github():
 
 
 async def test_flush_day_writes_row_and_marks_log(session, fake_github):
-    session.add(MedActive(
-        key="seizar", name="Сейзар", column_label="Сейзар",
-        current_dose="25", started_at=date(2026, 5, 1),
-    ))
-    session.add(MedActive(
-        key="gidr_kanon", name="Гидр.Канон", column_label="Гидр.К",
-        current_dose="12.5", started_at=date(2026, 5, 1),
-    ))
-    session.add(MoodEntry(
-        day=date(2026, 5, 13), mood=1, anxiety=0, irritability=0, sleep_hours=7.5,
-    ))
+    session.add(
+        MedActive(
+            key="seizar",
+            name="Сейзар",
+            column_label="Сейзар",
+            current_dose="25",
+            started_at=date(2026, 5, 1),
+        )
+    )
+    session.add(
+        MedActive(
+            key="gidr_kanon",
+            name="Гидр.Канон",
+            column_label="Гидр.К",
+            current_dose="12.5",
+            started_at=date(2026, 5, 1),
+        )
+    )
+    session.add(
+        MoodEntry(
+            day=date(2026, 5, 13),
+            mood=1,
+            anxiety=0,
+            irritability=0,
+            sleep_hours=7.5,
+        )
+    )
     session.add(MedicationLog(day=date(2026, 5, 13), med_key="seizar", taken=True))
     session.add(MedicationLog(day=date(2026, 5, 13), med_key="gidr_kanon", taken=True))
     await session.commit()
@@ -49,7 +65,8 @@ async def test_flush_day_writes_row_and_marks_log(session, fake_github):
     fake_github.write.assert_awaited_once()
     call_kwargs = fake_github.write.call_args.kwargs
     written_text = (
-        fake_github.write.call_args.args[1] if len(fake_github.write.call_args.args) > 1
+        fake_github.write.call_args.args[1]
+        if len(fake_github.write.call_args.args) > 1
         else call_kwargs["text"]
     )
     assert "| 13 | +1 |" in written_text
@@ -88,18 +105,34 @@ async def test_flush_day_no_op_if_content_unchanged(session, fake_github):
     )
     fake_github.read = AsyncMock(return_value=FileContent(text=pre_filled, sha="x"))
 
-    session.add(MedActive(
-        key="seizar", name="Сейзар", column_label="Сейзар",
-        current_dose="25", started_at=date(2026, 5, 1),
-    ))
-    session.add(MedActive(
-        key="gidr_kanon", name="Гидр.Канон", column_label="Гидр.К",
-        current_dose="12.5", started_at=date(2026, 5, 1),
-    ))
-    session.add(MoodEntry(
-        day=date(2026, 5, 13), mood=1, anxiety=0, irritability=0,
-        sleep_hours=7.0, notes="quiet",
-    ))
+    session.add(
+        MedActive(
+            key="seizar",
+            name="Сейзар",
+            column_label="Сейзар",
+            current_dose="25",
+            started_at=date(2026, 5, 1),
+        )
+    )
+    session.add(
+        MedActive(
+            key="gidr_kanon",
+            name="Гидр.Канон",
+            column_label="Гидр.К",
+            current_dose="12.5",
+            started_at=date(2026, 5, 1),
+        )
+    )
+    session.add(
+        MoodEntry(
+            day=date(2026, 5, 13),
+            mood=1,
+            anxiety=0,
+            irritability=0,
+            sleep_hours=7.0,
+            notes="quiet",
+        )
+    )
     session.add(MedicationLog(day=date(2026, 5, 13), med_key="seizar", taken=True))
     session.add(MedicationLog(day=date(2026, 5, 13), med_key="gidr_kanon", taken=True))
     await session.commit()

@@ -30,8 +30,22 @@ def claude(tmp_path, fake_anthropic, monkeypatch):
 async def test_parse_eat_returns_meal_items(claude, fake_anthropic):
     payload = {
         "items": [
-            {"name": "Шаурма", "kcal": 450, "protein": 22.0, "fat": 18.0, "carbs": 45.0, "source": "estimate"},
-            {"name": "Кола 0.4л", "kcal": 170, "protein": 0, "fat": 0, "carbs": 42, "source": "reference"},
+            {
+                "name": "Шаурма",
+                "kcal": 450,
+                "protein": 22.0,
+                "fat": 18.0,
+                "carbs": 45.0,
+                "source": "estimate",
+            },
+            {
+                "name": "Кола 0.4л",
+                "kcal": 170,
+                "protein": 0,
+                "fat": 0,
+                "carbs": 42,
+                "source": "reference",
+            },
         ]
     }
     msg = MagicMock()

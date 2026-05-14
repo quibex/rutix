@@ -31,10 +31,15 @@ async def test_medication_log_composite_key(session):
 
 
 async def test_med_active_archived_at_nullable(session):
-    session.add(MedActive(
-        key="seizar", name="Сейзар", column_label="Сейзар",
-        current_dose="25", started_at=date(2026, 4, 26),
-    ))
+    session.add(
+        MedActive(
+            key="seizar",
+            name="Сейзар",
+            column_label="Сейзар",
+            current_dose="25",
+            started_at=date(2026, 4, 26),
+        )
+    )
     await session.commit()
 
     loaded = await session.get(MedActive, "seizar")

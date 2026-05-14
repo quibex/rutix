@@ -44,7 +44,9 @@ def test_render_weekly_metrics_table_counts_habits():
         ),
     ]
     result = render_weekly(
-        year=2026, week_num=19, days=days,
+        year=2026,
+        week_num=19,
+        days=days,
         habits=HabitsConfig(
             daily=["📚 Anki", "🌅 Skincare AM"],
             scheduled={"🏋️ Strength": ["ВТ", "ЧТ", "СБ"]},
@@ -59,22 +61,35 @@ def test_render_weekly_metrics_table_counts_habits():
 
 def test_render_weekly_includes_empty_editorial_templates():
     result = render_weekly(
-        year=2026, week_num=19, days=[],
+        year=2026,
+        week_num=19,
+        days=[],
         habits=HabitsConfig(daily=[], scheduled={}),
     )
-    for h in ("## 🎯 Фокус этой недели", "## ✅ Что получилось хорошо?",
-              "## ❌ Что не получилось? Почему?", "## 📈 Прогресс",
-              "## 💡 Инсайты", "## Оценка недели"):
+    for h in (
+        "## 🎯 Фокус этой недели",
+        "## ✅ Что получилось хорошо?",
+        "## ❌ Что не получилось? Почему?",
+        "## 📈 Прогресс",
+        "## 💡 Инсайты",
+        "## Оценка недели",
+    ):
         assert h in result
 
 
 def test_render_weekly_avg_kcal_when_data_present():
     days = [
-        WeeklyDay(date=date(2026, 5, 4), done_habits=set(), sleep_offh=None, sleep_onh=None, kcal=2000),
-        WeeklyDay(date=date(2026, 5, 5), done_habits=set(), sleep_offh=None, sleep_onh=None, kcal=3000),
+        WeeklyDay(
+            date=date(2026, 5, 4), done_habits=set(), sleep_offh=None, sleep_onh=None, kcal=2000
+        ),
+        WeeklyDay(
+            date=date(2026, 5, 5), done_habits=set(), sleep_offh=None, sleep_onh=None, kcal=3000
+        ),
     ]
     result = render_weekly(
-        year=2026, week_num=19, days=days,
+        year=2026,
+        week_num=19,
+        days=days,
         habits=HabitsConfig(daily=[], scheduled={}),
     )
     # Avg of 2 days with kcal data = (2000 + 3000) / 2 = 2500

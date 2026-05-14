@@ -32,7 +32,9 @@ DAILY = """# x
 
 @pytest.fixture
 def fake_settings():
-    s = MagicMock(); s.tz = "Europe/Moscow"; return s
+    s = MagicMock()
+    s.tz = "Europe/Moscow"
+    return s
 
 
 @pytest.fixture

@@ -3,7 +3,11 @@ from rutix.markdown.mood_tracker import DayRow, MedColumn, render_row
 
 def test_render_full_row():
     row = DayRow(
-        day=14, mood=2, sleep_hours=7.5, anxiety=1, irritability=0,
+        day=14,
+        mood=2,
+        sleep_hours=7.5,
+        anxiety=1,
+        irritability=0,
         meds=[MedColumn("Сейзар", True, "25"), MedColumn("Гидр.К", True, "12.5")],
         notes="ок",
     )

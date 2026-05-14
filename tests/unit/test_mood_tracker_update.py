@@ -37,7 +37,7 @@ def test_update_does_not_match_other_section():
     result = update_day_row(SAMPLE, 2026, 5, 14, new_row)
 
     assert "| 14   | +1     |" in result  # April preserved
-    assert "| 14 | -1 | 6 " in result      # May updated
+    assert "| 14 | -1 | 6 " in result  # May updated
 
 
 def test_update_missing_section_raises():

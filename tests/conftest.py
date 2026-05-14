@@ -1,4 +1,5 @@
 """Shared pytest fixtures."""
+
 import pytest_asyncio
 
 from rutix.db.engine import make_engine, make_session_factory

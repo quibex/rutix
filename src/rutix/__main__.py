@@ -32,7 +32,7 @@ async def _run() -> None:
     session_factory = make_session_factory(engine)
     github = GitHubClient(token=settings.github_api_token, repo=settings.life_repo)
     claude = ClaudeClient(api_key=settings.anthropic_api_key)
-    todoist = TodoistClient(token=settings.todoist_token)
+    todoist = TodoistClient(token=settings.todoist_token, tz=settings.tz)
 
     bot = build_bot(settings.bot_token)
     dp = build_dispatcher(allowed_user_id=settings.telegram_user_id)

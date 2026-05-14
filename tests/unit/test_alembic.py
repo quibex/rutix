@@ -1,4 +1,5 @@
 """Defends against accidental dual-head migrations after merges."""
+
 import subprocess
 import sys
 from pathlib import Path
