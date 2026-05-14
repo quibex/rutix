@@ -73,3 +73,15 @@ async def test_read_raises_on_5xx(client):
     with pytest.raises(httpx.HTTPStatusError):
         await client.read("x.md")
     await client.aclose()
+
+
+@respx.mock
+async def test_delete_sends_sha(client):
+    route = respx.delete("https://api.github.com/repos/quibex/life/contents/x.md").mock(
+        return_value=httpx.Response(200, json={"commit": {"sha": "delsha"}})
+    )
+    result = await client.delete("x.md", "drop", sha="oldsha")
+    assert result == "delsha"
+    body = json.loads(route.calls[0].request.content)
+    assert body["sha"] == "oldsha"
+    await client.aclose()

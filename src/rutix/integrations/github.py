@@ -55,5 +55,15 @@ class GitHubClient:
         r.raise_for_status()
         return r.json()["commit"]["sha"]
 
+    async def delete(self, path: str, message: str, sha: str) -> str:
+        """Delete a file. Returns the new commit SHA."""
+        r = await self.http.request(
+            "DELETE",
+            f"/repos/{self.repo}/contents/{path}",
+            json={"message": message, "sha": sha},
+        )
+        r.raise_for_status()
+        return r.json()["commit"]["sha"]
+
     async def aclose(self) -> None:
         await self.http.aclose()
