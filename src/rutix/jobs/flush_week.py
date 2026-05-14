@@ -86,17 +86,11 @@ async def flush_week(
 
     week_dates = days_of_week(sunday)
 
-    # Read daily files (some may be missing if user didn't have them)
-    daily_contents: dict[date, str | None] = {}
+    # Read daily files (some may be missing if user didn't have them).
+    # FileContent has both text and sha — one fetch per file.
+    daily_files: dict[date, object] = {}
     for d in week_dates:
-        file = await github.read(f"daily/{d.isoformat()}.md")
-        daily_contents[d] = file.text if file else None
-        # We need SHA for delete later — re-fetch later or stash now:
-    # Re-read with SHAs (one fetch each, simple)
-    daily_files = {}
-    for d in week_dates:
-        f = await github.read(f"daily/{d.isoformat()}.md")
-        daily_files[d] = f
+        daily_files[d] = await github.read(f"daily/{d.isoformat()}.md")
 
     # Parse habits.md for the config
     habits_file = await github.read("habits.md")
