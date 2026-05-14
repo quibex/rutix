@@ -17,6 +17,7 @@ class MealItem:
     protein: float
     fat: float
     carbs: float
+    source: str = ""  # "reference" | "estimate" | "" — set by Claude parser
 
 
 # --- Section helpers --------------------------------------------------------

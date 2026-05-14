@@ -66,8 +66,8 @@ async def test_parse_eat_returns_meal_items(claude, fake_anthropic):
     items = await claude.parse_eat("шаурма + кола", reference_md="## ВкусВилл\n...")
 
     assert items == [
-        MealItem("", "Шаурма", 450, 22.0, 18.0, 45.0),
-        MealItem("", "Кола 0.4л", 170, 0.0, 0.0, 42.0),
+        MealItem("", "Шаурма", 450, 22.0, 18.0, 45.0, source="estimate"),
+        MealItem("", "Кола 0.4л", 170, 0.0, 0.0, 42.0, source="reference"),
     ]
     fake_anthropic.messages.create.assert_awaited_once()
     call_kwargs = fake_anthropic.messages.create.call_args.kwargs
@@ -105,7 +105,7 @@ async def test_parse_eat_accepts_messages_history(claude, fake_anthropic):
         {"role": "user", "content": "нет, картошка"},
     ]
     items = await claude.parse_eat(history, reference_md="")
-    assert items == [MealItem("", "Картошка", 250, 5.0, 8.0, 40.0)]
+    assert items == [MealItem("", "Картошка", 250, 5.0, 8.0, 40.0, source="estimate")]
     # Messages were forwarded as-is
     assert fake_anthropic.messages.create.call_args.kwargs["messages"] == history
 

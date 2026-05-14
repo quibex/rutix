@@ -95,6 +95,7 @@ class ClaudeClient:
                 protein=float(it["protein"]),
                 fat=float(it["fat"]),
                 carbs=float(it["carbs"]),
+                source=str(it.get("source", "")),
             )
             for it in payload["items"]
         ]
