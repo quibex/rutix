@@ -1,15 +1,18 @@
-"""/eat — text or photo. Claude parses, user confirms, bot writes to daily Питание.
+"""/eat — open a session, add foods (text or photo), confirm to write.
 
 Flow:
-1. User sends `/eat <text>` or just a photo (with optional caption).
-2. Bot parses via Claude (adaptive thinking + reference cache).
-3. Bot shows preview + ✅ Записать / ❌ Отменить buttons.
-4. While in confirming state, plain text or photo messages are treated as
-   corrections — passed to Claude as multi-turn history so the model
-   adjusts (not adds to) the prior parse.
-5. On ✅: writes to today's daily Питание section. If any items were
-   estimates (not in reference), also appends them to nutrition/reference.md
-   under «## Из бота (требует проверки)» so they're available next time.
+1. `/eat` (alone) opens an empty session, bot says "пишите".
+2. `/eat <text>` or photo (with no active state) opens a session AND parses
+   the first input immediately.
+3. Inside the session, every text/photo is fed to Claude as a new turn —
+   model is told to return the **full current list** (add / replace / remove /
+   adjust portion based on context).
+4. After each turn, bot edits the same preview message with the updated parse
+   and ✅ Записать / ❌ Отменить buttons.
+5. ✅: writes to today's daily Питание section. Estimates (items not in
+   reference.md) are appended to nutrition/reference.md under
+   «## Из бота (требует проверки)».
+6. ❌: clears state.
 """
 
 import base64
@@ -45,7 +48,10 @@ REFERENCE_BOT_SECTION = "## Из бота (требует проверки)"
 
 
 class EatStates(StatesGroup):
-    confirming = State()
+    session = State()
+
+
+# --- Slot / formatting helpers ---
 
 
 def _slot_for_time(now: datetime) -> str:
@@ -75,7 +81,14 @@ def _confirm_keyboard() -> InlineKeyboardMarkup:
 
 
 def _format_preview(items: list[MealItem], slot: str) -> str:
-    lines = [f"📋 Распарсил для «{slot}»:\n"]
+    if not items:
+        return (
+            f"📝 Сессия записи открыта (слот «{slot}»).\n\n"
+            "Пишите блюда текстом или кидайте фото. "
+            "Можно несколько сообщений подряд — я буду накапливать.\n\n"
+            "Когда всё перечислили — нажмите ✅."
+        )
+    lines = [f"📋 Текущий список «{slot}»:\n"]
     for it in items:
         marker = " 🆕" if it.source == "estimate" else ""
         lines.append(f"• {it.name}{marker} — {_format_kbju(it.kcal, it.protein, it.fat, it.carbs)}")
@@ -86,7 +99,7 @@ def _format_preview(items: list[MealItem], slot: str) -> str:
     lines.append(f"\nИтого: {_format_kbju(total_kcal, total_p, total_f, total_c)}")
     if any(it.source == "estimate" for it in items):
         lines.append("\n🆕 — нет в справочнике, оценка модели. При записи добавлю в reference.")
-    lines.append("\nЗаписать в файл дня?")
+    lines.append("\nДополните или нажмите ✅ чтобы записать.")
     return "\n".join(lines)
 
 
@@ -106,6 +119,9 @@ def _items_to_dump(items: list[MealItem]) -> list[dict]:
 
 def _items_from_dump(items_dump: list[dict], slot: str) -> list[MealItem]:
     return [MealItem(slot=slot, **i) for i in items_dump]
+
+
+# --- Photo / multimodal helpers ---
 
 
 async def _download_photo_b64(bot: Bot, file_id: str) -> str:
@@ -131,155 +147,67 @@ def _build_user_content(text: str, image_b64: str | None) -> str | list[dict]:
     ]
 
 
-async def _start_eat_flow(
-    message: Message,
-    state: FSMContext,
-    settings: Settings,
-    github: GitHubClient,
-    claude: ClaudeClient,
-    food_text: str,
-    image_b64: str | None = None,
-):
-    """Common entry path for both /eat (text) and photo messages."""
+# --- Session lifecycle ---
+
+
+async def _open_session(message: Message, state: FSMContext, settings: Settings) -> dict:
+    """Initialize a fresh session in state. Returns the seed data dict."""
     now = datetime.now(ZoneInfo(settings.tz))
     day = subjective_today(now, settings.tz)
     slot = _slot_for_time(now)
+    data = {
+        "items": [],
+        "history": [],
+        "slot": slot,
+        "day": day.isoformat(),
+        "preview_chat_id": None,
+        "preview_message_id": None,
+    }
+    await state.update_data(**data)
+    await state.set_state(EatStates.session)
+    return data
 
-    daily_path = f"daily/{day.isoformat()}.md"
+
+async def _process_input(
+    message: Message,
+    state: FSMContext,
+    settings: Settings,
+    github: GitHubClient,
+    claude: ClaudeClient,
+    text: str,
+    image_b64: str | None,
+):
+    """Append the new turn to history, re-parse, edit the preview message.
+
+    Works for both first turn (history empty) and subsequent refinements.
+    """
+    data = await state.get_data()
+    if not data:
+        # Defensive — shouldn't happen because we set state before this is called
+        data = await _open_session(message, state, settings)
+
+    history = list(data.get("history", []))
+    slot = data.get("slot", "Перекус")
+    day_iso = data.get("day")
+    preview_chat_id = data.get("preview_chat_id")
+    preview_message_id = data.get("preview_message_id")
+
+    # Sanity check: daily file must exist before we burn Claude tokens
+    daily_path = f"daily/{day_iso}.md"
     daily_file = await github.read(daily_path)
     if daily_file is None:
         await message.answer(
-            f"⚠️ Файл {daily_path} не найден в репозитории.\nПроверьте что он создан в Obsidian."
+            f"⚠️ Файл {daily_path} не найден в репозитории.\n"
+            "Создайте его в Obsidian и попробуйте снова."
         )
+        await state.clear()
         return
 
-    thinking_msg = await message.answer("🤔 Разбираю что вы съели…")
-
-    reference = await github.read(REFERENCE_PATH)
-    reference_text = reference.text if reference else ""
-
-    user_content = _build_user_content(food_text, image_b64)
-    initial_messages = [{"role": "user", "content": user_content}]
-
-    try:
-        items = await claude.parse_eat(initial_messages, reference_md=reference_text)
-    except ValueError as e:
-        logger.exception("Claude parse failed")
-        await thinking_msg.edit_text(
-            f"⚠️ Не получилось разобрать ответ модели: {e}\nПопробуйте переформулировать."
-        )
-        return
-
-    if not items:
-        await thinking_msg.edit_text("⚠️ Модель вернула пустой список. Уточните, что вы съели.")
-        return
-
-    items_dump = _items_to_dump(items)
-    # Seed history with the original turn + Claude's parse so refinements have context.
-    # For multimodal content, we serialize a text-only summary in history (Claude can
-    # still use it as context, even without re-sending the image).
-    seed_user_text = food_text if food_text else "[фото еды]"
-    history = [
-        {"role": "user", "content": seed_user_text},
-        {
-            "role": "assistant",
-            "content": json.dumps({"items": items_dump}, ensure_ascii=False),
-        },
-    ]
-    await state.update_data(
-        items=items_dump,
-        slot=slot,
-        day=day.isoformat(),
-        food_text=food_text or "[фото]",
-        history=history,
-    )
-    await state.set_state(EatStates.confirming)
-    await thinking_msg.edit_text(_format_preview(items, slot), reply_markup=_confirm_keyboard())
-
-
-@router.message(Command("eat"))
-async def cmd_eat(
-    message: Message,
-    state: FSMContext,
-    settings: Settings,
-    github: GitHubClient,
-    claude: ClaudeClient,
-):
-    raw = (message.text or "").split(maxsplit=1)
-    if len(raw) < 2 or not raw[1].strip():
-        await message.answer(
-            "Пример использования:\n/eat шаурма + кола 0.5\n\nИли просто отправьте фото еды."
-        )
-        return
-    await _start_eat_flow(message, state, settings, github, claude, raw[1].strip(), image_b64=None)
-
-
-@router.message(StateFilter(None), F.photo)
-async def msg_eat_photo(
-    message: Message,
-    state: FSMContext,
-    settings: Settings,
-    github: GitHubClient,
-    claude: ClaudeClient,
-    bot: Bot,
-):
-    """Photo (alone or with caption) starts an /eat flow with vision."""
-    photo = message.photo[-1]  # highest-res variant
-    image_b64 = await _download_photo_b64(bot, photo.file_id)
-    caption = (message.caption or "").strip()
-    # If caption starts with /eat, strip the command prefix
-    if caption.lower().startswith("/eat"):
-        caption = caption[4:].strip()
-    await _start_eat_flow(message, state, settings, github, claude, caption, image_b64=image_b64)
-
-
-@router.message(EatStates.confirming, F.photo)
-async def msg_refine_photo(
-    message: Message,
-    state: FSMContext,
-    settings: Settings,
-    github: GitHubClient,
-    claude: ClaudeClient,
-    bot: Bot,
-):
-    """Photo while in confirming state — treat as a correction with vision context."""
-    photo = message.photo[-1]
-    image_b64 = await _download_photo_b64(bot, photo.file_id)
-    caption = (message.caption or "Скорректируй по этому фото.").strip()
-    await _refine_eat(message, state, github, claude, edit_text=caption, image_b64=image_b64)
-
-
-@router.message(EatStates.confirming, F.text & ~F.text.startswith("/"))
-async def msg_refine_text(
-    message: Message,
-    state: FSMContext,
-    settings: Settings,
-    github: GitHubClient,
-    claude: ClaudeClient,
-):
-    """Plain text while in confirming state — treat as a correction."""
-    edit_text = message.text.strip()
-    if not edit_text:
-        return
-    await _refine_eat(message, state, github, claude, edit_text=edit_text, image_b64=None)
-
-
-async def _refine_eat(
-    message: Message,
-    state: FSMContext,
-    github: GitHubClient,
-    claude: ClaudeClient,
-    edit_text: str,
-    image_b64: str | None,
-):
-    data = await state.get_data()
-    history = list(data.get("history", []))
-    slot = data.get("slot", "Перекус")
-
-    user_content = _build_user_content(edit_text, image_b64)
+    # Append the new user turn
+    user_content = _build_user_content(text, image_b64)
     history.append({"role": "user", "content": user_content})
 
-    thinking_msg = await message.answer("🤔 Учту и перепарсю…")
+    thinking_msg = await message.answer("🤔 Разбираю…")
 
     reference = await github.read(REFERENCE_PATH)
     reference_text = reference.text if reference else ""
@@ -287,9 +215,10 @@ async def _refine_eat(
     try:
         items = await claude.parse_eat(history, reference_md=reference_text)
     except ValueError as e:
-        logger.exception("Claude reparse failed")
+        logger.exception("Claude parse failed")
         await thinking_msg.edit_text(
-            f"⚠️ Не получилось разобрать: {e}\nПопробуйте переформулировать или нажмите ❌."
+            f"⚠️ Не получилось разобрать ответ модели: {e}\n"
+            "Попробуйте переформулировать или нажмите ❌."
         )
         return
 
@@ -301,19 +230,143 @@ async def _refine_eat(
     history.append(
         {"role": "assistant", "content": json.dumps({"items": items_dump}, ensure_ascii=False)}
     )
-    await state.update_data(items=items_dump, history=history, slot=slot)
-    await thinking_msg.edit_text(_format_preview(items, slot), reply_markup=_confirm_keyboard())
+
+    # Update or create the preview message. We try to edit the previous preview;
+    # the "thinking" message is then deleted to avoid clutter.
+    preview_text = _format_preview(items, slot)
+    if preview_chat_id and preview_message_id:
+        try:
+            await message.bot.edit_message_text(
+                preview_text,
+                chat_id=preview_chat_id,
+                message_id=preview_message_id,
+                reply_markup=_confirm_keyboard(),
+            )
+            await thinking_msg.delete()
+        except Exception:
+            # If editing failed (message too old, deleted, etc.), fall back to
+            # the thinking message
+            await thinking_msg.edit_text(preview_text, reply_markup=_confirm_keyboard())
+            preview_chat_id = thinking_msg.chat.id
+            preview_message_id = thinking_msg.message_id
+    else:
+        await thinking_msg.edit_text(preview_text, reply_markup=_confirm_keyboard())
+        preview_chat_id = thinking_msg.chat.id
+        preview_message_id = thinking_msg.message_id
+
+    await state.update_data(
+        items=items_dump,
+        history=history,
+        slot=slot,
+        day=day_iso,
+        preview_chat_id=preview_chat_id,
+        preview_message_id=preview_message_id,
+    )
 
 
-@router.callback_query(EatStates.confirming, F.data == "eat:cancel")
+# --- /eat command ---
+
+
+@router.message(Command("eat"))
+async def cmd_eat(
+    message: Message,
+    state: FSMContext,
+    settings: Settings,
+    github: GitHubClient,
+    claude: ClaudeClient,
+):
+    raw = (message.text or "").split(maxsplit=1)
+    food_text = raw[1].strip() if len(raw) > 1 else ""
+
+    # Reset any prior session and open a fresh one
+    await state.clear()
+    data = await _open_session(message, state, settings)
+
+    if not food_text:
+        # Empty session — just send the prompt-for-input message and store its id
+        msg = await message.answer(
+            _format_preview([], data["slot"]),
+            reply_markup=_confirm_keyboard(),
+        )
+        await state.update_data(preview_chat_id=msg.chat.id, preview_message_id=msg.message_id)
+        return
+
+    # Has text — parse immediately
+    await _process_input(message, state, settings, github, claude, text=food_text, image_b64=None)
+
+
+# --- Photo as session opener (no state) ---
+
+
+@router.message(StateFilter(None), F.photo)
+async def msg_eat_photo(
+    message: Message,
+    state: FSMContext,
+    settings: Settings,
+    github: GitHubClient,
+    claude: ClaudeClient,
+    bot: Bot,
+):
+    """Photo (with optional caption) outside any session opens a fresh /eat session."""
+    photo = message.photo[-1]
+    image_b64 = await _download_photo_b64(bot, photo.file_id)
+    caption = (message.caption or "").strip()
+    if caption.lower().startswith("/eat"):
+        caption = caption[4:].strip()
+
+    await state.clear()
+    await _open_session(message, state, settings)
+    await _process_input(
+        message, state, settings, github, claude, text=caption, image_b64=image_b64
+    )
+
+
+# --- In-session input (text + photo) ---
+
+
+@router.message(EatStates.session, F.photo)
+async def msg_session_photo(
+    message: Message,
+    state: FSMContext,
+    settings: Settings,
+    github: GitHubClient,
+    claude: ClaudeClient,
+    bot: Bot,
+):
+    photo = message.photo[-1]
+    image_b64 = await _download_photo_b64(bot, photo.file_id)
+    caption = (message.caption or "").strip()
+    await _process_input(
+        message, state, settings, github, claude, text=caption, image_b64=image_b64
+    )
+
+
+@router.message(EatStates.session, F.text & ~F.text.startswith("/"))
+async def msg_session_text(
+    message: Message,
+    state: FSMContext,
+    settings: Settings,
+    github: GitHubClient,
+    claude: ClaudeClient,
+):
+    text = message.text.strip()
+    if not text:
+        return
+    await _process_input(message, state, settings, github, claude, text=text, image_b64=None)
+
+
+# --- Confirm / cancel ---
+
+
+@router.callback_query(EatStates.session, F.data == "eat:cancel")
 async def cb_cancel(cb: CallbackQuery, state: FSMContext):
     await state.clear()
-    await cb.message.edit_text("❌ Отменено. Ничего не записал.")
+    await cb.message.edit_text("❌ Сессия отменена. Ничего не записал.")
     await cb.answer()
 
 
 def _append_to_reference(reference_md: str, estimates: list[MealItem], day_iso: str) -> str:
-    """Append new estimate rows to the «## Из бота» section. Creates the section
+    """Append new estimate rows to «## Из бота» section. Creates the section
     at the end of the file if missing.
     """
     text = reference_md.rstrip()
@@ -334,7 +387,6 @@ def _append_to_reference(reference_md: str, estimates: list[MealItem], day_iso: 
 async def _persist_estimates_to_reference(
     github: GitHubClient, items: list[MealItem], day_iso: str
 ) -> str | None:
-    """Append estimate-source items to nutrition/reference.md. Returns commit SHA or None."""
     estimates = [it for it in items if it.source == "estimate"]
     if not estimates:
         return None
@@ -353,7 +405,7 @@ async def _persist_estimates_to_reference(
     )
 
 
-@router.callback_query(EatStates.confirming, F.data == "eat:ok")
+@router.callback_query(EatStates.session, F.data == "eat:ok")
 async def cb_ok(
     cb: CallbackQuery,
     state: FSMContext,
@@ -364,10 +416,13 @@ async def cb_ok(
     await state.clear()
 
     items_dump = data.get("items", [])
+    if not items_dump:
+        await cb.message.edit_text("⏭ Сессия пустая. Ничего не записал.")
+        await cb.answer()
+        return
+
     slot = data.get("slot", "Перекус")
     day = date.fromisoformat(data["day"])
-    food_text = data.get("food_text", "")
-
     items = _items_from_dump(items_dump, slot)
     daily_path = f"daily/{day.isoformat()}.md"
 
@@ -386,11 +441,10 @@ async def cb_ok(
     daily_sha = await github.write(
         daily_path,
         new_text,
-        f"eat({day.isoformat()}): {food_text[:60]}",
+        f"eat({day.isoformat()}): {len(items)} позиций",
         sha=daily_file.sha,
     )
 
-    # Auto-append estimates to reference.md
     ref_sha = None
     try:
         ref_sha = await _persist_estimates_to_reference(github, items, day.isoformat())

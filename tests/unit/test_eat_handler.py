@@ -184,9 +184,10 @@ async def test_cmd_eat_replies_with_error_if_claude_fails(
     assert "не получилось" in reply_text.lower() or "⚠️" in reply_text
 
 
-async def test_cmd_eat_replies_with_help_when_no_args(
+async def test_cmd_eat_no_args_opens_empty_session(
     fake_message, fake_state, fake_github, fake_claude, fake_settings
 ):
+    """`/eat` alone opens a session and waits for input — no Claude call yet."""
     fake_message.text = "/eat"
 
     await cmd_eat(
@@ -199,5 +200,8 @@ async def test_cmd_eat_replies_with_help_when_no_args(
 
     fake_github.write.assert_not_called()
     fake_claude.parse_eat.assert_not_called()
+    # State was set to session (set_state called at least once)
+    fake_state.set_state.assert_awaited()
+    # Preview-empty message was sent
     reply_text = fake_message.answer.call_args.args[0]
-    assert "/eat" in reply_text
+    assert "Сессия" in reply_text or "сессия" in reply_text.lower()
