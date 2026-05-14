@@ -5,7 +5,7 @@ import logging
 
 from pythonjsonlogger import jsonlogger
 
-from rutix.bot.app import build_bot, build_dispatcher
+from rutix.bot.app import BOT_COMMANDS, build_bot, build_dispatcher
 from rutix.db.engine import make_engine, make_session_factory
 from rutix.integrations.claude import ClaudeClient
 from rutix.integrations.github import GitHubClient
@@ -42,8 +42,13 @@ async def _run() -> None:
     dp["todoist"] = todoist
     dp["settings"] = settings
 
-    scheduler = make_scheduler(session_factory, github, todoist, settings.tz)
+    scheduler = make_scheduler(
+        session_factory, github, todoist, bot, settings.telegram_user_id, settings.tz
+    )
     scheduler.start()
+
+    await bot.set_my_commands(BOT_COMMANDS)
+    log.info("registered %d bot commands in /-menu", len(BOT_COMMANDS))
 
     try:
         await dp.start_polling(bot)
