@@ -250,3 +250,145 @@ asyncio.run(go())
 If today isn't Monday, returns None (expected). On a Monday, generates
 `weekly/2026-Wxx.md`, `nutrition/2026-Wxx.md`, deletes the 7 daily files,
 and purges SQLite.
+
+## Phase 3 — Production deployment
+
+### Architecture
+
+GitHub Actions on every `main` push → builds Docker image → pushes to
+`ghcr.io/quibex/rutix:latest` → SSHes into the VPS → writes `.env` from
+GitHub Secrets/Variables → `docker compose pull && up -d --force-recreate` →
+verifies container is healthy.
+
+Single container, single VPS. No reverse proxy, no Caddy, no inbound traffic
+(bot uses long polling to Telegram).
+
+### One-time VPS setup
+
+#### 1. Provision
+
+Any VPS with at least 1 GB RAM and Docker support works. Tested on
+Hetzner CX22 (~€4/mo, Ubuntu 22.04).
+
+#### 2. Install Docker
+
+```bash
+ssh root@<vps-ip>
+apt update && apt upgrade -y
+curl -fsSL https://get.docker.com | sh
+```
+
+#### 3. Create deploy user with SSH key access
+
+```bash
+adduser --disabled-password --gecos "" deploy
+usermod -aG docker deploy
+mkdir -p /home/deploy/.ssh
+chmod 700 /home/deploy/.ssh
+# Generate a deploy keypair locally:
+#   ssh-keygen -t ed25519 -f ~/.ssh/rutix_deploy -C "rutix-deploy"
+# Paste the .pub here:
+echo "<paste contents of ~/.ssh/rutix_deploy.pub>" > /home/deploy/.ssh/authorized_keys
+chmod 600 /home/deploy/.ssh/authorized_keys
+chown -R deploy:deploy /home/deploy/.ssh
+```
+
+Verify SSH from your laptop: `ssh -i ~/.ssh/rutix_deploy deploy@<vps-ip>`
+
+#### 4. Create the deploy directory
+
+```bash
+ssh deploy@<vps-ip>
+sudo mkdir -p /opt/rutix
+sudo chown deploy:deploy /opt/rutix
+```
+
+### GitHub repo setup
+
+#### Secrets (Settings → Secrets and variables → Actions → New repository secret)
+
+| Name | Value |
+|------|-------|
+| `SSH_HOST` | VPS IP or hostname |
+| `SSH_USER` | `deploy` |
+| `SSH_PORT` | `22` (or your custom port) |
+| `SSH_PRIVATE_KEY` | Contents of `~/.ssh/rutix_deploy` (private key, including `-----BEGIN/END-----` lines) |
+| `BOT_TOKEN` | From [@BotFather](https://t.me/botfather) |
+| `ANTHROPIC_API_KEY` | From https://console.anthropic.com |
+| `GITHUB_API_TOKEN` | Fine-grained PAT for `quibex/life`, scope `Contents: read+write` |
+| `TODOIST_TOKEN` | From Todoist Settings → Integrations → Developer (Pro required for habit recurring task tracking) |
+
+#### Variables (Settings → Secrets and variables → Actions → Variables tab)
+
+| Name | Value |
+|------|-------|
+| `TELEGRAM_USER_ID` | Your numeric Telegram ID (use [@userinfobot](https://t.me/userinfobot)) |
+| `LIFE_REPO` | `quibex/life` |
+| `TZ` | `Europe/Moscow` |
+
+#### Environment (Settings → Environments → New environment)
+
+Create one called `prod`. No protection rules needed (single-user repo). The
+`deploy` job in `prod.yml` is gated by `environment: prod` — it won't run
+until this exists.
+
+### First deployment
+
+Once Secrets, Variables, and the `prod` environment exist:
+
+```bash
+git commit --allow-empty -m "trigger first prod deploy"
+git push origin main
+gh run watch
+```
+
+Pipeline runs:
+1. **ci** — ruff + pytest + alembic validation (~1 min)
+2. **build-and-push** — Docker build + push to GHCR (~2 min on cold cache, ~30s warm)
+3. **deploy** — SCP `docker-compose.prod.yml` to `/opt/rutix`, write `.env`, `docker compose pull && up -d --force-recreate`, sleep 15s, verify health (~30s)
+
+Total: ~3-4 min cold, ~1-2 min warm.
+
+If `deploy` fails with "Bot unhealthy after deploy", the script dumps last
+200 lines of `docker compose logs bot` — look there for the cause (usually
+missing/wrong env var).
+
+### Verifying the bot is alive
+
+```bash
+ssh deploy@<vps-ip>
+cd /opt/rutix
+docker compose ps                    # should show rutix-bot Up
+docker compose logs --tail=50 bot    # JSON-formatted startup logs
+```
+
+In Telegram with your bot:
+- `/track` — should walk through the FSM
+- `/eat шаурма` — should reply within ~5s
+- `/today` — should show what you logged
+
+### Updating the bot
+
+Every push to `main` deploys automatically. Cron jobs (`flush_day`,
+`update_habits`, `flush_week`) re-register on every container restart — they
+fire at 03:00 MSK regardless of when you redeploy.
+
+### Backup (optional, not implemented)
+
+The bot's persistent state lives in `/opt/rutix/data/bot.db`. Loss = mild
+inconvenience (re-add `meds_active` via `/meds`, idempotent re-flush). To
+add backup later:
+
+```bash
+# On VPS, daily cron:
+0 4 * * * sqlite3 /opt/rutix/data/bot.db ".backup /opt/rutix/data/backup-$(date +\%F).db"
+# Then rsync to a private remote, or push to a private gist via gh.
+```
+
+### Troubleshooting
+
+- **`deploy` job fails with "Bot container was not created"** → `docker compose pull` likely failed. Check that the GHCR image is public (`gh api orgs/quibex/packages/container/rutix --jq .visibility` or repo Settings → Packages → make public).
+- **Bot starts but `/track` does nothing** → `TELEGRAM_USER_ID` mismatch. Whitelist middleware silently drops everything else. Check `docker compose logs bot` for "rutix starting (user_id=...)".
+- **`/eat` fails with FileNotFoundError on `prompts/eat.md`** → Image was built before Phase 3 fix. Trigger a rebuild: `gh workflow run prod.yml`.
+- **Cron at 03:00 MSK didn't fire** → Container TZ. Verify with `docker compose exec bot date` — should print MSK time.
+- **Activity Log returns 403 on habit update** → Todoist Pro not active. Either subscribe or accept that recurring task tracking won't work until you do.
