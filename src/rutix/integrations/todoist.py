@@ -45,8 +45,7 @@ class TodoistClient:
         return {
             ev["extra_data"]["content"]
             for ev in data.get("results", [])
-            if ev.get("event_type") == "completed"
-            and ev.get("extra_data", {}).get("content")
+            if ev.get("event_type") == "completed" and ev.get("extra_data", {}).get("content")
         }
 
     async def aclose(self) -> None:
