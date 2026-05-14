@@ -33,7 +33,7 @@ class TodoistClient:
             "since": f"{day.isoformat()}T00:00:00",
             "until": f"{day.isoformat()}T23:59:59",
         }
-        r = await self.http.get("/api/v1/activity", params=params)
+        r = await self.http.get("/api/v1/activities", params=params)
         if r.status_code == 403:
             logger.warning(
                 "Todoist Activity Log returned 403 — likely Pro required. "
@@ -44,8 +44,9 @@ class TodoistClient:
         data = r.json()
         return {
             ev["extra_data"]["content"]
-            for ev in data.get("events", [])
+            for ev in data.get("results", [])
             if ev.get("event_type") == "completed"
+            and ev.get("extra_data", {}).get("content")
         }
 
     async def aclose(self) -> None:
