@@ -4,17 +4,37 @@ Bot fills hard numbers (Метрики table, Аналитика). Editorial sec
 (Фокус, Что получилось, Что не получилось, Прогресс, Инсайты, Оценка)
 are left as empty templates for the user to fill in Obsidian / via Claude.ai.
 """
+
 from dataclasses import dataclass, field
 from datetime import date
 
 RU_MONTHS_GENITIVE = {
-    1: "января", 2: "февраля", 3: "марта", 4: "апреля",
-    5: "мая", 6: "июня", 7: "июля", 8: "августа",
-    9: "сентября", 10: "октября", 11: "ноября", 12: "декабря",
+    1: "января",
+    2: "февраля",
+    3: "марта",
+    4: "апреля",
+    5: "мая",
+    6: "июня",
+    7: "июля",
+    8: "августа",
+    9: "сентября",
+    10: "октября",
+    11: "ноября",
+    12: "декабря",
 }
 RU_MONTH_SHORT = {
-    1: "янв", 2: "фев", 3: "мар", 4: "апр", 5: "мая", 6: "июн",
-    7: "июл", 8: "авг", 9: "сен", 10: "окт", 11: "ноя", 12: "дек",
+    1: "янв",
+    2: "фев",
+    3: "мар",
+    4: "апр",
+    5: "мая",
+    6: "июн",
+    7: "июл",
+    8: "авг",
+    9: "сен",
+    10: "окт",
+    11: "ноя",
+    12: "дек",
 }
 
 
@@ -22,15 +42,16 @@ RU_MONTH_SHORT = {
 class WeeklyDay:
     date: date
     done_habits: set[str]
-    sleep_offh: float | None    # bedtime hour (e.g. 1.5 for 01:30) — Phase 2 keeps None
-    sleep_onh: float | None     # wakeup hour
-    kcal: int | None            # total kcal for the day (from daily.py parse_meals)
+    sleep_offh: float | None  # bedtime hour (e.g. 1.5 for 01:30) — Phase 2 keeps None
+    sleep_onh: float | None  # wakeup hour
+    kcal: int | None  # total kcal for the day (from daily.py parse_meals)
 
 
 @dataclass
 class HabitsConfig:
-    daily: list[str]                                  # ["📚 Anki", ...]
-    scheduled: dict[str, list[str]] = field(default_factory=dict)  # {"🏋️ Strength": ["ВТ","ЧТ","СБ"]}
+    daily: list[str]  # ["📚 Anki", ...]
+    # {"🏋️ Strength": ["ВТ","ЧТ","СБ"]}
+    scheduled: dict[str, list[str]] = field(default_factory=dict)
 
 
 def russian_date_range(start: date, end: date) -> str:
@@ -50,9 +71,7 @@ def _avg_kcal(days: list[WeeklyDay]) -> int | None:
     return round(sum(vals) / len(vals))
 
 
-def render_weekly(
-    year: int, week_num: int, days: list[WeeklyDay], habits: HabitsConfig
-) -> str:
+def render_weekly(year: int, week_num: int, days: list[WeeklyDay], habits: HabitsConfig) -> str:
     if days:
         date_range = russian_date_range(days[0].date, days[-1].date)
         title = f"# Неделя {week_num} ({date_range})"

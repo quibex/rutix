@@ -1,4 +1,5 @@
 """/week — 7 buttons (current ISO week) → day summary on tap."""
+
 import logging
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
@@ -28,13 +29,15 @@ DAY_LABELS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 
 def _build_keyboard(days: list[date]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[[
-            InlineKeyboardButton(
-                text=f"{DAY_LABELS[d.weekday()]} {d.day}",
-                callback_data=f"week_day:{d.isoformat()}",
-            )
-            for d in days
-        ]]
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=f"{DAY_LABELS[d.weekday()]} {d.day}",
+                    callback_data=f"week_day:{d.isoformat()}",
+                )
+                for d in days
+            ]
+        ]
     )
 
 
@@ -68,9 +71,15 @@ async def cb_week_day(
     if mood is None:
         lines.append("📊 Трек не сделан")
     else:
-        mood_str = f"+{mood.mood}" if mood.mood and mood.mood > 0 else str(mood.mood) if mood.mood is not None else "—"
+        if mood.mood is None:
+            mood_str = "—"
+        elif mood.mood > 0:
+            mood_str = f"+{mood.mood}"
+        else:
+            mood_str = str(mood.mood)
         lines.append(
-            f"📊 {mood_str} · трев {mood.anxiety} · разд {mood.irritability} · сон {mood.sleep_hours}ч"
+            f"📊 {mood_str} · трев {mood.anxiety}"
+            f" · разд {mood.irritability} · сон {mood.sleep_hours}ч"
         )
 
     if meals:

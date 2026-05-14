@@ -3,11 +3,12 @@
 Pure aggregation — Сводка table + per-day full meal tables. Editorial
 "Наблюдения" section is omitted (Phase 3 might add it via Claude).
 """
+
 from dataclasses import dataclass
 from datetime import date
 
 from rutix.markdown.daily import MealItem
-from rutix.markdown.weekly import RU_MONTHS_GENITIVE, russian_date_range
+from rutix.markdown.weekly import russian_date_range
 
 RU_WEEKDAYS_SHORT = {0: "ПН", 1: "ВТ", 2: "СР", 3: "ЧТ", 4: "ПТ", 5: "СБ", 6: "ВС"}
 
@@ -50,7 +51,8 @@ def render_nutrition_weekly(year: int, week_num: int, days: list[NutritionDay]) 
     for d in days:
         kcal, p, f, c = _totals(d.meals)
         summary_rows.append(
-            f"| {_day_label(d.date)} | {kcal} | {_format_num(p)} | {_format_num(f)} | {_format_num(c)} |"
+            f"| {_day_label(d.date)} | {kcal} |"
+            f" {_format_num(p)} | {_format_num(f)} | {_format_num(c)} |"
         )
         if d.meals:
             days_with_data.append((kcal, p, f, c))
@@ -91,8 +93,7 @@ def render_nutrition_weekly(year: int, week_num: int, days: list[NutritionDay]) 
         detail_blocks.append(
             f"### {_day_label(d.date)}\n\n"
             "| Приём | Что | Ккал | Б | Ж | У |\n"
-            "|-------|-----|------|---|---|---|\n"
-            + "\n".join(rows)
+            "|-------|-----|------|---|---|---|\n" + "\n".join(rows)
         )
 
     return (

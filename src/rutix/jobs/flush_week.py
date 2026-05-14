@@ -2,11 +2,12 @@
 
 Idempotent via FlushLog `week:<id>`.
 """
+
 import logging
 import re
-from datetime import date, timedelta
+from datetime import date
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from rutix.db.models import FlushLog, MedicationLog, MoodEntry
@@ -94,7 +95,9 @@ async def flush_week(
 
     # Parse habits.md for the config
     habits_file = await github.read("habits.md")
-    habits = _parse_habits_md(habits_file.text) if habits_file else HabitsConfig(daily=[], scheduled={})
+    habits = (
+        _parse_habits_md(habits_file.text) if habits_file else HabitsConfig(daily=[], scheduled={})
+    )
 
     # Build WeeklyDay + NutritionDay arrays
     weekly_days: list[WeeklyDay] = []
@@ -102,23 +105,33 @@ async def flush_week(
     for d in week_dates:
         f = daily_files.get(d)
         if f is None:
-            weekly_days.append(WeeklyDay(date=d, done_habits=set(), sleep_offh=None, sleep_onh=None, kcal=None))
+            weekly_days.append(
+                WeeklyDay(date=d, done_habits=set(), sleep_offh=None, sleep_onh=None, kcal=None)
+            )
             nutrition_days.append(NutritionDay(date=d, meals=[]))
             continue
         meals = parse_meals(f.text)
         kcal_total = sum(m.kcal for m in meals) if meals else None
-        weekly_days.append(WeeklyDay(
-            date=d, done_habits=_parse_done_habits(f.text),
-            sleep_offh=None, sleep_onh=None, kcal=kcal_total,
-        ))
+        weekly_days.append(
+            WeeklyDay(
+                date=d,
+                done_habits=_parse_done_habits(f.text),
+                sleep_offh=None,
+                sleep_onh=None,
+                kcal=kcal_total,
+            )
+        )
         nutrition_days.append(NutritionDay(date=d, meals=meals))
 
     weekly_md = render_weekly(
-        year=sunday.isocalendar().year, week_num=sunday.isocalendar().week,
-        days=weekly_days, habits=habits,
+        year=sunday.isocalendar().year,
+        week_num=sunday.isocalendar().week,
+        days=weekly_days,
+        habits=habits,
     )
     nutrition_md = render_nutrition_weekly(
-        year=sunday.isocalendar().year, week_num=sunday.isocalendar().week,
+        year=sunday.isocalendar().year,
+        week_num=sunday.isocalendar().week,
         days=nutrition_days,
     )
 
@@ -127,12 +140,16 @@ async def flush_week(
 
     weekly_existing = await github.read(weekly_path)
     weekly_sha = await github.write(
-        weekly_path, weekly_md, f"weekly({wid}): авто-запись из rutix-bot",
+        weekly_path,
+        weekly_md,
+        f"weekly({wid}): авто-запись из rutix-bot",
         sha=weekly_existing.sha if weekly_existing else None,
     )
     nutrition_existing = await github.read(nutrition_path)
     await github.write(
-        nutrition_path, nutrition_md, f"nutrition({wid}): авто-запись из rutix-bot",
+        nutrition_path,
+        nutrition_md,
+        f"nutrition({wid}): авто-запись из rutix-bot",
         sha=nutrition_existing.sha if nutrition_existing else None,
     )
 

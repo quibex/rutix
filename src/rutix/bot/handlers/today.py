@@ -1,4 +1,5 @@
 """/today — show today's mood (SQLite) + meals (GitHub) summary."""
+
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -39,7 +40,12 @@ async def cmd_today(
     if mood is None:
         lines.append("📊 Трек ещё не делал — /track")
     else:
-        mood_str = f"+{mood.mood}" if mood.mood and mood.mood > 0 else str(mood.mood) if mood.mood is not None else "—"
+        if mood.mood is None:
+            mood_str = "—"
+        elif mood.mood > 0:
+            mood_str = f"+{mood.mood}"
+        else:
+            mood_str = str(mood.mood)
         lines.append(
             f"📊 Настр. {mood_str} · тревога {mood.anxiety} · "
             f"раздр. {mood.irritability} · сон {mood.sleep_hours}ч"

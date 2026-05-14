@@ -7,7 +7,9 @@ from pythonjsonlogger import jsonlogger
 
 from rutix.bot.app import build_bot, build_dispatcher
 from rutix.db.engine import make_engine, make_session_factory
+from rutix.integrations.claude import ClaudeClient
 from rutix.integrations.github import GitHubClient
+from rutix.integrations.todoist import TodoistClient
 from rutix.jobs.scheduler import make_scheduler
 from rutix.settings import load_settings
 
@@ -29,14 +31,18 @@ async def _run() -> None:
     engine = make_engine(settings.database_url)
     session_factory = make_session_factory(engine)
     github = GitHubClient(token=settings.github_api_token, repo=settings.life_repo)
+    claude = ClaudeClient(api_key=settings.anthropic_api_key)
+    todoist = TodoistClient(token=settings.todoist_token)
 
     bot = build_bot(settings.bot_token)
     dp = build_dispatcher(allowed_user_id=settings.telegram_user_id)
     dp["session_factory"] = session_factory
     dp["github"] = github
+    dp["claude"] = claude
+    dp["todoist"] = todoist
     dp["settings"] = settings
 
-    scheduler = make_scheduler(session_factory, github, settings.tz)
+    scheduler = make_scheduler(session_factory, github, todoist, settings.tz)
     scheduler.start()
 
     try:
@@ -45,6 +51,7 @@ async def _run() -> None:
         log.info("rutix shutting down")
         scheduler.shutdown(wait=False)
         await github.aclose()
+        await todoist.aclose()
         await bot.session.close()
         await engine.dispose()
 

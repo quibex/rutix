@@ -1,6 +1,7 @@
 """/meds — list/add/archive/change-dose for active medication protocol."""
+
 import logging
-from datetime import date, datetime
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
@@ -33,16 +34,25 @@ class MedsStates(StatesGroup):
 
 
 def _menu_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="➕ Добавить", callback_data="meds:add"),
-        InlineKeyboardButton(text="📦 Архив", callback_data="meds:archive_pick"),
-        InlineKeyboardButton(text="✏️ Доза", callback_data="meds:dose_pick"),
-    ]])
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="➕ Добавить", callback_data="meds:add"),
+                InlineKeyboardButton(text="📦 Архив", callback_data="meds:archive_pick"),
+                InlineKeyboardButton(text="✏️ Доза", callback_data="meds:dose_pick"),
+            ]
+        ]
+    )
 
 
 def _picklist_kb(meds: list[MedActive], action: str) -> InlineKeyboardMarkup:
     rows = [
-        [InlineKeyboardButton(text=f"{m.name} ({m.current_dose})", callback_data=f"meds:{action}:{m.key}")]
+        [
+            InlineKeyboardButton(
+                text=f"{m.name} ({m.current_dose})",
+                callback_data=f"meds:{action}:{m.key}",
+            )
+        ]
         for m in meds
     ]
     rows.append([InlineKeyboardButton(text="← Отмена", callback_data="meds:cancel")])
@@ -63,9 +73,13 @@ async def cmd_meds(
     session_factory: async_sessionmaker[AsyncSession],
 ):
     async with session_factory() as session:
-        meds = (await session.scalars(
-            select(MedActive).where(MedActive.archived_at.is_(None)).order_by(MedActive.started_at)
-        )).all()
+        meds = (
+            await session.scalars(
+                select(MedActive)
+                .where(MedActive.archived_at.is_(None))
+                .order_by(MedActive.started_at)
+            )
+        ).all()
     await message.answer(_format_list(meds), reply_markup=_menu_kb())
 
 
@@ -77,6 +91,7 @@ async def cb_cancel(cb: CallbackQuery, state: FSMContext):
 
 
 # --- Add flow ---
+
 
 @router.callback_query(F.data == "meds:add")
 async def cb_add(cb: CallbackQuery, state: FSMContext):
@@ -108,16 +123,23 @@ async def msg_add_label(message: Message, state: FSMContext):
 
 @router.message(MedsStates.add_dose, F.text)
 async def msg_add_dose(
-    message: Message, state: FSMContext, settings: Settings,
+    message: Message,
+    state: FSMContext,
+    settings: Settings,
     session_factory: async_sessionmaker[AsyncSession],
 ):
     data = await state.get_data()
     today = datetime.now(ZoneInfo(settings.tz)).date()
     async with session_factory() as session:
-        session.add(MedActive(
-            key=data["key"], name=data["name"], column_label=data["label"],
-            current_dose=message.text.strip(), started_at=today,
-        ))
+        session.add(
+            MedActive(
+                key=data["key"],
+                name=data["name"],
+                column_label=data["label"],
+                current_dose=message.text.strip(),
+                started_at=today,
+            )
+        )
         await session.commit()
     await state.clear()
     await message.answer(f"✅ Добавил {data['name']} ({message.text.strip()})")
@@ -125,14 +147,16 @@ async def msg_add_dose(
 
 # --- Archive flow ---
 
+
 @router.callback_query(F.data == "meds:archive_pick")
 async def cb_archive_pick(
-    cb: CallbackQuery, session_factory: async_sessionmaker[AsyncSession],
+    cb: CallbackQuery,
+    session_factory: async_sessionmaker[AsyncSession],
 ):
     async with session_factory() as session:
-        meds = (await session.scalars(
-            select(MedActive).where(MedActive.archived_at.is_(None))
-        )).all()
+        meds = (
+            await session.scalars(select(MedActive).where(MedActive.archived_at.is_(None)))
+        ).all()
     if not meds:
         await cb.message.edit_text("Нет активных")
         await cb.answer()
@@ -143,7 +167,8 @@ async def cb_archive_pick(
 
 @router.callback_query(F.data.startswith("meds:archive:"))
 async def cb_archive_apply(
-    cb: CallbackQuery, settings: Settings,
+    cb: CallbackQuery,
+    settings: Settings,
     session_factory: async_sessionmaker[AsyncSession],
 ):
     key = cb.data.split(":", 2)[2]
@@ -161,14 +186,16 @@ async def cb_archive_apply(
 
 # --- Dose flow ---
 
+
 @router.callback_query(F.data == "meds:dose_pick")
 async def cb_dose_pick(
-    cb: CallbackQuery, session_factory: async_sessionmaker[AsyncSession],
+    cb: CallbackQuery,
+    session_factory: async_sessionmaker[AsyncSession],
 ):
     async with session_factory() as session:
-        meds = (await session.scalars(
-            select(MedActive).where(MedActive.archived_at.is_(None))
-        )).all()
+        meds = (
+            await session.scalars(select(MedActive).where(MedActive.archived_at.is_(None)))
+        ).all()
     if not meds:
         await cb.message.edit_text("Нет активных")
         await cb.answer()
@@ -188,7 +215,8 @@ async def cb_dose_pick_med(cb: CallbackQuery, state: FSMContext):
 
 @router.message(MedsStates.edit_dose_value, F.text)
 async def msg_dose_value(
-    message: Message, state: FSMContext,
+    message: Message,
+    state: FSMContext,
     session_factory: async_sessionmaker[AsyncSession],
 ):
     data = await state.get_data()
