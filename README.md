@@ -131,3 +131,122 @@ async def go():
 asyncio.run(go())
 "
 ```
+
+## Phase 2 smoke test
+
+Pre-reqs (in addition to Phase 1):
+- Anthropic API key (https://console.anthropic.com) → `ANTHROPIC_API_KEY`
+- Todoist Personal API Token from Settings → Integrations → Developer → `TODOIST_TOKEN`
+- Todoist Pro (Activity Log endpoint requires it for recurring tasks)
+
+### Update .env
+
+```bash
+echo "ANTHROPIC_API_KEY=sk-ant-..." >> .env
+echo "TODOIST_TOKEN=..." >> .env
+docker compose up -d --force-recreate
+```
+
+### /eat
+
+```
+/eat шаурма + кола
+```
+
+Bot should reply within ~5s with parsed items + Итого. Verify in
+`quibex/life:daily/<today>.md` Питание section.
+
+### /note + /done
+
+```
+/note важная мысль про сегодня
+/done закрыл задачу X
+```
+
+Verify in daily file Заметки / Что сделано sections.
+
+### /today
+
+```
+/today
+```
+
+Shows mood (from /track) + meals total (from /eat).
+
+### /week
+
+```
+/week
+```
+
+7 buttons appear. Tap any day → bot edits message to show that day's summary.
+
+### /meds
+
+```
+/meds
+```
+
+Shows current meds. Tap ➕ Добавить, walk through key/name/label/dose flow.
+Verify SQLite: `docker compose exec bot sqlite3 /app/data/bot.db "SELECT * FROM meds_active;"`
+
+### Habits update (manual trigger)
+
+```bash
+docker compose exec bot python -c "
+import asyncio
+from datetime import date
+from rutix.integrations.github import GitHubClient
+from rutix.integrations.todoist import TodoistClient
+from rutix.jobs.update_habits import update_habits
+from rutix.settings import load_settings
+from rutix.time_utils import yesterday_of, subjective_today
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+async def go():
+    s = load_settings()
+    gh = GitHubClient(s.github_api_token, s.life_repo)
+    td = TodoistClient(s.todoist_token)
+    target = yesterday_of(subjective_today(datetime.now(ZoneInfo(s.tz)), s.tz))
+    sha = await update_habits(gh, td, target)
+    print('result:', sha)
+    await gh.aclose(); await td.aclose()
+
+asyncio.run(go())
+"
+```
+
+Verify checked habits in yesterday's `daily/<...>.md` match what you completed in Todoist.
+
+### Weekly flush (manual trigger, only meaningful on a Monday)
+
+```bash
+docker compose exec bot python -c "
+import asyncio
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from rutix.db.engine import make_engine, make_session_factory
+from rutix.integrations.github import GitHubClient
+from rutix.jobs.flush_week import flush_week
+from rutix.settings import load_settings
+from rutix.time_utils import subjective_today
+
+async def go():
+    s = load_settings()
+    engine = make_engine(s.database_url)
+    Session = make_session_factory(engine)
+    gh = GitHubClient(s.github_api_token, s.life_repo)
+    today = subjective_today(datetime.now(ZoneInfo(s.tz)), s.tz)
+    async with Session() as sess:
+        sha = await flush_week(sess, gh, today)
+        print('result:', sha)
+    await gh.aclose()
+
+asyncio.run(go())
+"
+```
+
+If today isn't Monday, returns None (expected). On a Monday, generates
+`weekly/2026-Wxx.md`, `nutrition/2026-Wxx.md`, deletes the 7 daily files,
+and purges SQLite.
