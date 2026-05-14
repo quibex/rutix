@@ -3,13 +3,14 @@
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
-EARLY_MORNING_BOUNDARY = time(5, 0)
+EARLY_MORNING_BOUNDARY = time(3, 0)
 
 
 def subjective_today(now: datetime, tz: str = "Europe/Moscow") -> date:
     """User's perceived 'today'.
 
-    If local time is before 05:00, returns yesterday — the user hasn't slept yet.
+    If local time is before 03:00, returns yesterday — the user hasn't slept yet
+    (the day "extends" past midnight by 3 hours).
     """
     local = now.astimezone(ZoneInfo(tz))
     if local.time() < EARLY_MORNING_BOUNDARY:

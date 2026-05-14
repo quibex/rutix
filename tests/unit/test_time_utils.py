@@ -13,24 +13,33 @@ from rutix.time_utils import (
 MSK = ZoneInfo("Europe/Moscow")
 
 
-def test_subjective_today_after_5am_returns_calendar_day():
+def test_subjective_today_morning_returns_calendar_day():
+    """After 03:00 — the new day has started."""
     now = datetime(2026, 5, 14, 10, 0, tzinfo=MSK)
     assert subjective_today(now) == date(2026, 5, 14)
 
 
-def test_subjective_today_before_5am_returns_yesterday():
-    now = datetime(2026, 5, 14, 4, 30, tzinfo=MSK)
+def test_subjective_today_late_night_returns_yesterday():
+    """01:00 → still yesterday (user hasn't slept yet)."""
+    now = datetime(2026, 5, 14, 1, 0, tzinfo=MSK)
     assert subjective_today(now) == date(2026, 5, 13)
 
 
-def test_subjective_today_at_exactly_5am_returns_today():
-    now = datetime(2026, 5, 14, 5, 0, tzinfo=MSK)
+def test_subjective_today_just_before_3am_returns_yesterday():
+    """02:59 — still yesterday."""
+    now = datetime(2026, 5, 14, 2, 59, tzinfo=MSK)
+    assert subjective_today(now) == date(2026, 5, 13)
+
+
+def test_subjective_today_at_exactly_3am_returns_today():
+    """03:00 sharp — new day has begun."""
+    now = datetime(2026, 5, 14, 3, 0, tzinfo=MSK)
     assert subjective_today(now) == date(2026, 5, 14)
 
 
 def test_subjective_today_handles_utc_input():
-    # 02:00 UTC == 05:00 MSK
-    now = datetime(2026, 5, 14, 2, 0, tzinfo=ZoneInfo("UTC"))
+    # 00:00 UTC == 03:00 MSK — the boundary
+    now = datetime(2026, 5, 14, 0, 0, tzinfo=ZoneInfo("UTC"))
     assert subjective_today(now) == date(2026, 5, 14)
 
 
