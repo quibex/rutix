@@ -161,10 +161,11 @@ async def msg_refine(
     github: GitHubClient,
     claude: ClaudeClient,
 ):
-    """While waiting for ✅/❌, treat plain text as a correction — re-parse with conversation history.
+    """While waiting for ✅/❌, treat plain text as a correction.
 
-    Pass the full back-and-forth to Claude (original food text + previous parses + new edit)
-    so the model treats new turns as adjustments to the prior result, not as additions.
+    Pass the full back-and-forth to Claude (original food text + previous
+    parses + new edit) so the model treats new turns as adjustments to the
+    prior result, not as additions.
     """
     import json as _json
 
