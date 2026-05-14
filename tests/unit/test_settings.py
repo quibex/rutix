@@ -17,6 +17,10 @@ def test_settings_loads_required_fields_from_env(monkeypatch):
 
 
 def test_settings_defaults(monkeypatch):
+    # Isolate from outer env (CI sets DATABASE_URL etc.) — defaults only matter
+    # when nothing in env overrides them.
+    for var in ["LIFE_REPO", "TZ", "DATABASE_URL"]:
+        monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("BOT_TOKEN", "x")
     monkeypatch.setenv("TELEGRAM_USER_ID", "1")
     monkeypatch.setenv("GITHUB_API_TOKEN", "x")
