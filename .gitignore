@@ -7,3 +7,6 @@ __pycache__/
 data/
 *.db
 .DS_Store
+
+# Alembic temp
+alembic/versions/__pycache__/
