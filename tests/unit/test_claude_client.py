@@ -139,7 +139,7 @@ async def test_parse_eat_raises_on_malformed_json(claude, fake_anthropic):
     msg = MagicMock(content=[_text_block("not a json")])
     fake_anthropic.messages.create.return_value = msg
 
-    with pytest.raises(ValueError, match="invalid JSON"):
+    with pytest.raises(ValueError, match="не-JSON"):
         await claude.parse_eat("eggs", reference_md="")
 
 
