@@ -37,4 +37,6 @@ async def cmd_sync(
     if sha:
         await message.answer(f"✅ Закоммитил {target.isoformat()} → {sha[:7]}")
     else:
-        await message.answer(f"⏭ Нечего коммитить за {target.isoformat()} (уже сделано или нет данных)")
+        await message.answer(
+            f"⏭ Нечего коммитить за {target.isoformat()} (уже сделано или нет данных)"
+        )
