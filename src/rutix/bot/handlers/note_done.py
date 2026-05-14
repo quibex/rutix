@@ -1,4 +1,5 @@
 """/note and /done — append a bullet to today's daily Заметки / Что сделано."""
+
 import logging
 from datetime import datetime
 from typing import Callable
@@ -46,7 +47,8 @@ async def _append_to_daily(
         return
 
     sha = await github.write(
-        path, new_text,
+        path,
+        new_text,
         f"{cmd_name}({day.isoformat()}): {text[:60]}",
         sha=file.sha,
     )

@@ -1,4 +1,5 @@
 """/eat <text> — Claude parses, bot writes to today's daily Питание."""
+
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -44,9 +45,7 @@ async def cmd_eat(
 ):
     raw = (message.text or "").split(maxsplit=1)
     if len(raw) < 2 or not raw[1].strip():
-        await message.answer(
-            "Использование: /eat <что съел>\nПример: /eat шаурма + кола"
-        )
+        await message.answer("Использование: /eat <что съел>\nПример: /eat шаурма + кола")
         return
 
     food_text = raw[1].strip()
@@ -83,23 +82,24 @@ async def cmd_eat(
         new_text = append_meal(new_text, item)
 
     sha = await github.write(
-        daily_path, new_text,
+        daily_path,
+        new_text,
         f"eat({day.isoformat()}): {food_text[:60]}",
         sha=daily_file.sha,
     )
 
     # Build reply
     added_lines = [
-        f"• {it.name} — {_format_kbju(it.kcal, it.protein, it.fat, it.carbs)}"
-        for it in items
+        f"• {it.name} — {_format_kbju(it.kcal, it.protein, it.fat, it.carbs)}" for it in items
     ]
     total_kcal = sum(it.kcal for it in items)
     total_p = sum(it.protein for it in items)
     total_f = sum(it.fat for it in items)
     total_c = sum(it.carbs for it in items)
     reply = (
-        f"✅ Добавил в {slot}:\n" + "\n".join(added_lines) +
-        f"\n\nИтого добавлено: {_format_kbju(total_kcal, total_p, total_f, total_c)}\n"
+        f"✅ Добавил в {slot}:\n"
+        + "\n".join(added_lines)
+        + f"\n\nИтого добавлено: {_format_kbju(total_kcal, total_p, total_f, total_c)}\n"
         f"Файл: {sha[:7]}"
     )
     await message.answer(reply)

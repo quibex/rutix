@@ -1,5 +1,6 @@
 """Daily 03:00 cron — fetch yesterday's Todoist completions, mark matching
 habits in yesterday's daily/*.md."""
+
 import logging
 import re
 from datetime import date
@@ -43,7 +44,8 @@ async def update_habits(
         return None
 
     sha = await github.write(
-        path, new_text,
+        path,
+        new_text,
         f"habits({day.isoformat()}): авто-запись из rutix-bot (Todoist)",
         sha=file.sha,
     )

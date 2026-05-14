@@ -3,6 +3,7 @@
 - update_habits(yesterday)    — Phase 2
 - flush_week(today)           — Phase 2 (Monday-only check inside)
 """
+
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo

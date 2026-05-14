@@ -3,6 +3,7 @@
 Activity Log requires Todoist Pro. On 403 we log and return an empty set
 so the scheduler doesn't crash.
 """
+
 import logging
 from datetime import date
 

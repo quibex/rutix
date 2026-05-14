@@ -4,13 +4,14 @@ A daily file has these sections (top-to-bottom): Сон, Время (ч), При
 Питание (table), Что сделано, Заметки. We touch Питание / Привычки /
 Что сделано / Заметки. The rest stays as the user wrote it.
 """
+
 import re
 from dataclasses import dataclass
 
 
 @dataclass
 class MealItem:
-    slot: str       # "Завтрак" | "Обед" | "Ужин" | "Перекус" | etc.
+    slot: str  # "Завтрак" | "Обед" | "Ужин" | "Перекус" | etc.
     name: str
     kcal: int
     protein: float
@@ -35,7 +36,7 @@ def _replace_section_body(md: str, title: str, new_body: str) -> str:
     for match in _SECTION_RE.finditer(md):
         if match.group("title").strip() == title:
             old_body = match.group("body")
-            return md[: match.start("body")] + new_body + md[match.start("body") + len(old_body):]
+            return md[: match.start("body")] + new_body + md[match.start("body") + len(old_body) :]
     raise ValueError(f"{title} section not found")
 
 
@@ -48,6 +49,7 @@ def _section_body(md: str, title: str) -> str:
 
 
 # --- Notes / Done -----------------------------------------------------------
+
 
 def _append_bullet(body: str, text: str) -> str:
     """Append `- text` as a new bullet to a section body.
@@ -211,10 +213,7 @@ def append_meal(md: str, item: MealItem) -> str:
 
     # Drop the empty placeholder row if it's right above Итого
     place_idx = itogo_idx - 1
-    if (
-        place_idx >= 0
-        and lines[place_idx].strip().replace("|", "").replace(" ", "") == ""
-    ):
+    if place_idx >= 0 and lines[place_idx].strip().replace("|", "").replace(" ", "") == "":
         del lines[place_idx]
         itogo_idx -= 1
 
@@ -231,9 +230,7 @@ def append_meal(md: str, item: MealItem) -> str:
         m = _DATA_ROW_RE.match(line)
         if not m:
             continue
-        items_now.append(
-            (int(m.group(3)), float(m.group(4)), float(m.group(5)), float(m.group(6)))
-        )
+        items_now.append((int(m.group(3)), float(m.group(4)), float(m.group(5)), float(m.group(6))))
     total_kcal = sum(i[0] for i in items_now)
     total_p = sum(i[1] for i in items_now)
     total_f = sum(i[2] for i in items_now)

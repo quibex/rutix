@@ -1,4 +1,5 @@
 """Configuration via env vars (validated by pydantic-settings)."""
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 

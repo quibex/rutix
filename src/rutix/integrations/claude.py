@@ -3,6 +3,7 @@
 Loads the system prompt from prompts/eat.md on every call so the prompt can
 be edited without redeploying the bot.
 """
+
 import json
 import logging
 from pathlib import Path
