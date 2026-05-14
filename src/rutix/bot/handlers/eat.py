@@ -314,7 +314,7 @@ def _is_album_sibling(message: Message) -> bool:
 # --- /eat command ---
 
 
-@router.message(Command("eat"))
+@router.message(Command("eat"), ~F.photo)
 async def cmd_eat(
     message: Message,
     state: FSMContext,

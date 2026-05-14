@@ -20,7 +20,7 @@ from rutix.markdown.daily import MealItem
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
-DEFAULT_MAX_TOKENS = 8000
+DEFAULT_MAX_TOKENS = 16000  # adaptive thinking + multimodal can use a lot of tokens
 
 
 class ClaudeClient:
@@ -100,13 +100,26 @@ class ClaudeClient:
         raw = "\n".join(text_blocks).strip()
 
         if not raw:
-            raise ValueError("Claude returned empty text response")
+            stop_reason = getattr(response, "stop_reason", None)
+            logger.error(
+                "Claude returned empty text. stop_reason=%s, blocks=%s",
+                stop_reason,
+                [getattr(b, "type", "?") for b in response.content],
+            )
+            if stop_reason == "max_tokens":
+                raise ValueError(
+                    "модель упёрлась в лимит токенов "
+                    "(адаптивное мышление + большой ввод). Попробуйте короче."
+                )
+            raise ValueError(
+                f"модель не вернула текст (stop_reason={stop_reason}). Попробуйте ещё раз."
+            )
 
         try:
             payload = json.loads(raw)
         except json.JSONDecodeError as e:
-            logger.error("Claude returned invalid JSON: %r", raw[:500])
-            raise ValueError(f"Claude returned invalid JSON: {e}") from e
+            logger.error("Claude returned invalid JSON: %r", raw[:1000])
+            raise ValueError(f"Claude вернул не-JSON: {e}") from e
 
         if "items" not in payload:
             raise ValueError("Claude response missing 'items' key")
