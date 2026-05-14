@@ -1,4 +1,5 @@
 """rutix entry point — long-poll bot + APScheduler in one process."""
+
 import asyncio
 import logging
 
@@ -13,9 +14,7 @@ from rutix.settings import load_settings
 
 def _setup_logging() -> None:
     handler = logging.StreamHandler()
-    handler.setFormatter(jsonlogger.JsonFormatter(
-        "%(asctime)s %(name)s %(levelname)s %(message)s"
-    ))
+    handler.setFormatter(jsonlogger.JsonFormatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
     root = logging.getLogger()
     root.setLevel(logging.INFO)
     root.handlers = [handler]

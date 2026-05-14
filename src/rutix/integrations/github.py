@@ -3,6 +3,7 @@
 Atomic per-file read/write: GET → modify → PUT with SHA.
 SHA-mismatch (concurrent edit) → caller decides whether to retry.
 """
+
 import base64
 from dataclasses import dataclass
 
@@ -12,6 +13,7 @@ import httpx
 @dataclass(frozen=True)
 class FileContent:
     """Decoded text + sha needed to update the file."""
+
     text: str
     sha: str
 
@@ -41,9 +43,7 @@ class GitHubClient:
         text = base64.b64decode(data["content"]).decode("utf-8")
         return FileContent(text=text, sha=data["sha"])
 
-    async def write(
-        self, path: str, text: str, message: str, sha: str | None = None
-    ) -> str:
+    async def write(self, path: str, text: str, message: str, sha: str | None = None) -> str:
         """Create or update the file. Returns the new commit SHA."""
         body: dict = {
             "message": message,

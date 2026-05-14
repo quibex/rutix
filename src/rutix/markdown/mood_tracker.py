@@ -5,21 +5,31 @@ Schema (matches the existing format in quibex/life:health/mood_tracker.md):
 
 `Алк/Нарк` column is always rendered empty — kept for back-compat with existing rows.
 """
+
 import re
 from dataclasses import dataclass, field
 
 RU_MONTHS = {
-    1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель",
-    5: "Май", 6: "Июнь", 7: "Июль", 8: "Август",
-    9: "Сентябрь", 10: "Октябрь", 11: "Ноябрь", 12: "Декабрь",
+    1: "Январь",
+    2: "Февраль",
+    3: "Март",
+    4: "Апрель",
+    5: "Май",
+    6: "Июнь",
+    7: "Июль",
+    8: "Август",
+    9: "Сентябрь",
+    10: "Октябрь",
+    11: "Ноябрь",
+    12: "Декабрь",
 }
 
 
 @dataclass
 class MedColumn:
-    column_label: str    # "Сейзар" — used by header generator (Phase 2+); not by render_row
+    column_label: str  # "Сейзар" — used by header generator (Phase 2+); not by render_row
     taken: bool
-    dose: str             # "25" or "12.5"
+    dose: str  # "25" or "12.5"
 
 
 @dataclass
@@ -45,7 +55,7 @@ def render_row(row: DayRow) -> str:
         _int_cell(row.irritability),
     ]
     cells.extend(_med_cell(m) for m in row.meds)
-    cells.append("")            # Алк/Нарк always empty
+    cells.append("")  # Алк/Нарк always empty
     cells.append(row.notes)
     return "| " + " | ".join(cells) + " |"
 
@@ -84,12 +94,10 @@ def update_day_row(markdown: str, year: int, month: int, day: int, new_row: str)
     if section_idx == -1:
         raise ValueError(f"Section not found: {section_header}")
 
-    after_header = markdown[section_idx + len(section_header):]
+    after_header = markdown[section_idx + len(section_header) :]
     next_section = re.search(r"\n## ", after_header)
     section_end = (
-        section_idx + len(section_header) + next_section.start()
-        if next_section
-        else len(markdown)
+        section_idx + len(section_header) + next_section.start() if next_section else len(markdown)
     )
     section_text = markdown[section_idx:section_end]
 

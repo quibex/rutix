@@ -1,4 +1,5 @@
 """/sync — force flush of yesterday into mood_tracker.md."""
+
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo

@@ -1,4 +1,5 @@
 """/track — multi-step mood entry via inline buttons."""
+
 import logging
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
@@ -35,7 +36,7 @@ class TrackStates(StatesGroup):
 
 
 def _kb_grid(values: list[tuple[str, str]], cols: int) -> InlineKeyboardMarkup:
-    rows = [values[i:i + cols] for i in range(0, len(values), cols)]
+    rows = [values[i : i + cols] for i in range(0, len(values), cols)]
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=label, callback_data=cb) for label, cb in row]
@@ -47,8 +48,13 @@ def _kb_grid(values: list[tuple[str, str]], cols: int) -> InlineKeyboardMarkup:
 def _mood_keyboard() -> InlineKeyboardMarkup:
     return _kb_grid(
         [
-            ("-3", "mood:-3"), ("-2", "mood:-2"), ("-1", "mood:-1"), ("0", "mood:0"),
-            ("+1", "mood:1"), ("+2", "mood:2"), ("+3", "mood:3"),
+            ("-3", "mood:-3"),
+            ("-2", "mood:-2"),
+            ("-1", "mood:-1"),
+            ("0", "mood:0"),
+            ("+1", "mood:1"),
+            ("+2", "mood:2"),
+            ("+3", "mood:3"),
         ],
         cols=4,
     )
@@ -131,11 +137,13 @@ async def cb_sleep(
     await state.set_state(TrackStates.meds)
 
     async with session_factory() as session:
-        meds = (await session.scalars(
-            select(MedActive)
-            .where(MedActive.archived_at.is_(None))
-            .order_by(MedActive.started_at)
-        )).all()
+        meds = (
+            await session.scalars(
+                select(MedActive)
+                .where(MedActive.archived_at.is_(None))
+                .order_by(MedActive.started_at)
+            )
+        ).all()
     await state.update_data(meds_pending=[m.key for m in meds], meds_taken=[])
 
     if meds:
@@ -236,22 +244,28 @@ async def _save_and_finish(message: Message, state: FSMContext, session_factory)
             if "weight" in data:
                 existing.weight = data["weight"]
         else:
-            session.add(MoodEntry(
-                day=day,
-                mood=data.get("mood"),
-                anxiety=data.get("anxiety"),
-                irritability=data.get("irritability"),
-                sleep_hours=data.get("sleep_hours"),
-                weight=data.get("weight"),
-            ))
+            session.add(
+                MoodEntry(
+                    day=day,
+                    mood=data.get("mood"),
+                    anxiety=data.get("anxiety"),
+                    irritability=data.get("irritability"),
+                    sleep_hours=data.get("sleep_hours"),
+                    weight=data.get("weight"),
+                )
+            )
         for entry in data.get("meds_taken", []):
             log = await session.get(MedicationLog, (day, entry["key"]))
             if log:
                 log.taken = entry["taken"]
             else:
-                session.add(MedicationLog(
-                    day=day, med_key=entry["key"], taken=entry["taken"],
-                ))
+                session.add(
+                    MedicationLog(
+                        day=day,
+                        med_key=entry["key"],
+                        taken=entry["taken"],
+                    )
+                )
         await session.commit()
 
     summary = (

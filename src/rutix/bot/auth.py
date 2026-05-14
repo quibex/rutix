@@ -1,4 +1,5 @@
 """Whitelist middleware — silently drop everyone except the configured user."""
+
 from typing import Any, Awaitable, Callable
 
 from aiogram import BaseMiddleware

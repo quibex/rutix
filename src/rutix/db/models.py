@@ -6,6 +6,7 @@ Tables:
 - meds_active:     active medication protocol (persistent, archived rows kept)
 - flush_log:       what's been flushed to git (persistent)
 """
+
 from datetime import date, datetime
 
 from sqlalchemy import Boolean, Date, DateTime, Float, Integer, String, func
@@ -56,7 +57,5 @@ class FlushLog(Base):
     __tablename__ = "flush_log"
 
     period_id: Mapped[str] = mapped_column(String, primary_key=True)
-    flushed_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.current_timestamp()
-    )
+    flushed_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.current_timestamp())
     git_sha: Mapped[str | None] = mapped_column(String, nullable=True)

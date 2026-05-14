@@ -1,4 +1,5 @@
 """Daily flush: SQLite mood/meds for a given day → row in mood_tracker.md."""
+
 import logging
 from datetime import date
 
@@ -39,16 +40,10 @@ async def flush_day(
 
     meds_active = (
         await session.scalars(
-            select(MedActive)
-            .where(MedActive.archived_at.is_(None))
-            .order_by(MedActive.started_at)
+            select(MedActive).where(MedActive.archived_at.is_(None)).order_by(MedActive.started_at)
         )
     ).all()
-    log_rows = (
-        await session.scalars(
-            select(MedicationLog).where(MedicationLog.day == day)
-        )
-    ).all()
+    log_rows = (await session.scalars(select(MedicationLog).where(MedicationLog.day == day))).all()
     taken_by_key = {r.med_key: r.taken for r in log_rows}
 
     row = DayRow(
