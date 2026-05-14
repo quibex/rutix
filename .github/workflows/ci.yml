@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  workflow_call:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Ruff check
+        run: ruff check src/
+
+      - name: Ruff format check
+        run: ruff format --check src/
+
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      BOT_TOKEN: "000000000:fake-token-for-testing"
+      TELEGRAM_USER_ID: "1"
+      GITHUB_API_TOKEN: "ghp_fake"
+      DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Validate Alembic heads count
+        run: |
+          set -e
+          HEAD_COUNT=$(alembic heads | wc -l | tr -d ' ')
+          if [ "$HEAD_COUNT" -ne 1 ]; then
+            echo "Expected exactly 1 Alembic head, got $HEAD_COUNT"
+            alembic heads
+            exit 1
+          fi
+
+      - name: Validate Alembic upgrade
+        run: |
+          mkdir -p data
+          alembic -x sqlalchemy.url=sqlite:///data/test.db upgrade head
+
+      - name: Run pytest
+        run: pytest tests/ -v
