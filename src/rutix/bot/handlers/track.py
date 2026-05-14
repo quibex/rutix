@@ -85,7 +85,7 @@ async def cmd_track(message: Message, state: FSMContext, settings: Settings):
     await state.update_data(day=today.isoformat(), meds_taken=[], meds_pending=[])
     await state.set_state(TrackStates.mood)
     await message.answer(
-        f"📊 Трек за {today.isoformat()}\n\nНастроение?",
+        f"📊 Трек за {today.isoformat()}.\n\nКакое было настроение?",
         reply_markup=_mood_keyboard(),
     )
 
@@ -96,7 +96,7 @@ async def cb_mood(cb: CallbackQuery, state: FSMContext):
     await state.update_data(mood=value)
     await state.set_state(TrackStates.anxiety)
     await cb.message.edit_text(
-        f"Настроение: {value:+d}\n\nТревога?",
+        f"Настроение: {value:+d}.\n\nКакая была тревога?",
         reply_markup=_0_to_3("anx"),
     )
     await cb.answer()
@@ -108,7 +108,7 @@ async def cb_anxiety(cb: CallbackQuery, state: FSMContext):
     await state.update_data(anxiety=value)
     await state.set_state(TrackStates.irritability)
     await cb.message.edit_text(
-        f"Тревога: {value}\n\nРаздражительность?",
+        f"Тревога: {value}.\n\nКакая была раздражительность?",
         reply_markup=_0_to_3("irr"),
     )
     await cb.answer()
@@ -120,7 +120,7 @@ async def cb_irritability(cb: CallbackQuery, state: FSMContext):
     await state.update_data(irritability=value)
     await state.set_state(TrackStates.sleep)
     await cb.message.edit_text(
-        f"Раздр.: {value}\n\nСон (часы)?",
+        f"Раздражительность: {value}.\n\nСколько часов спали?",
         reply_markup=_sleep_keyboard(),
     )
     await cb.answer()
@@ -165,7 +165,7 @@ async def _ask_next_med(message: Message, state: FSMContext, session_factory):
         await state.update_data(meds_pending=pending[1:])
         return await _ask_next_med(message, state, session_factory)
     await message.edit_text(
-        f"{med.name} ({med.current_dose}) — принял?",
+        f"Принимали {med.name} ({med.current_dose} мг)?",
         reply_markup=_med_keyboard(next_key),
     )
 
@@ -198,7 +198,7 @@ async def _maybe_ask_weight_or_save(message: Message, state: FSMContext, session
     if is_saturday(day):
         await state.set_state(TrackStates.weight)
         await message.edit_text(
-            "Вес (кг)? Напиши числом или жми «Пропустить».",
+            "Какой сегодня вес (кг)? Напишите числом или нажмите «Пропустить».",
             reply_markup=_weight_skip_keyboard(),
         )
     else:
@@ -214,7 +214,7 @@ async def msg_weight(
     try:
         weight = float(message.text.replace(",", "."))
     except ValueError:
-        await message.answer("Не число. Попробуй ещё раз или жми «Пропустить».")
+        await message.answer("⚠️ Это не число. Попробуйте ещё раз или нажмите «Пропустить».")
         return
     await state.update_data(weight=weight)
     await _save_and_finish(message, state, session_factory)
@@ -269,8 +269,8 @@ async def _save_and_finish(message: Message, state: FSMContext, session_factory)
         await session.commit()
 
     summary = (
-        f"✅ Сохранено за {day.isoformat()}:\n"
-        f"настр. {data.get('mood', '?'):+d}, "
+        f"✅ Записал за {day.isoformat()}:\n"
+        f"настроение {data.get('mood', '?'):+d}, "
         f"тревога {data.get('anxiety', '?')}, "
         f"раздр. {data.get('irritability', '?')}, "
         f"сон {data.get('sleep_hours', '?')}ч"

@@ -123,7 +123,7 @@ async def test_cmd_eat_replies_with_error_if_claude_fails(
 
     fake_github.write.assert_not_called()
     reply_text = fake_message.answer.call_args.args[0]
-    assert "не смог" in reply_text.lower() or "ошибка" in reply_text.lower()
+    assert "не получилось" in reply_text.lower() or "⚠️" in reply_text
 
 
 async def test_cmd_eat_replies_with_help_when_no_args(

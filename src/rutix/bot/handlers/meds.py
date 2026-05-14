@@ -1,4 +1,4 @@
-"""/meds — list/add/archive/change-dose for active medication protocol."""
+"""/meds — list / add (name+dose) / archive / change-dose for active medication protocol."""
 
 import logging
 from datetime import datetime
@@ -25,10 +25,60 @@ logger = logging.getLogger(__name__)
 router = Router(name="meds")
 
 
+_RU_TO_EN = {
+    "а": "a",
+    "б": "b",
+    "в": "v",
+    "г": "g",
+    "д": "d",
+    "е": "e",
+    "ё": "yo",
+    "ж": "zh",
+    "з": "z",
+    "и": "i",
+    "й": "y",
+    "к": "k",
+    "л": "l",
+    "м": "m",
+    "н": "n",
+    "о": "o",
+    "п": "p",
+    "р": "r",
+    "с": "s",
+    "т": "t",
+    "у": "u",
+    "ф": "f",
+    "х": "h",
+    "ц": "ts",
+    "ч": "ch",
+    "ш": "sh",
+    "щ": "sch",
+    "ъ": "",
+    "ы": "y",
+    "ь": "",
+    "э": "e",
+    "ю": "yu",
+    "я": "ya",
+}
+
+
+def _slugify(name: str) -> str:
+    """ASCII slug from a (possibly Russian) name. Used as the SQLite primary key."""
+    s = name.strip().lower()
+    out = []
+    for ch in s:
+        if ch.isascii() and (ch.isalnum() or ch in "-_"):
+            out.append(ch)
+        elif ch in _RU_TO_EN:
+            out.append(_RU_TO_EN[ch])
+        elif ch == " ":
+            out.append("_")
+    slug = "".join(out).strip("_-")
+    return slug or "med"
+
+
 class MedsStates(StatesGroup):
-    add_key = State()
     add_name = State()
-    add_label = State()
     add_dose = State()
     edit_dose_value = State()
 
@@ -38,8 +88,8 @@ def _menu_kb() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(text="➕ Добавить", callback_data="meds:add"),
-                InlineKeyboardButton(text="📦 Архив", callback_data="meds:archive_pick"),
-                InlineKeyboardButton(text="✏️ Доза", callback_data="meds:dose_pick"),
+                InlineKeyboardButton(text="📦 Архивировать", callback_data="meds:archive_pick"),
+                InlineKeyboardButton(text="✏️ Изменить дозу", callback_data="meds:dose_pick"),
             ]
         ]
     )
@@ -49,7 +99,7 @@ def _picklist_kb(meds: list[MedActive], action: str) -> InlineKeyboardMarkup:
     rows = [
         [
             InlineKeyboardButton(
-                text=f"{m.name} ({m.current_dose})",
+                text=f"{m.name} ({m.current_dose} мг)",
                 callback_data=f"meds:{action}:{m.key}",
             )
         ]
@@ -61,9 +111,9 @@ def _picklist_kb(meds: list[MedActive], action: str) -> InlineKeyboardMarkup:
 
 def _format_list(meds: list[MedActive]) -> str:
     if not meds:
-        return "🩺 Активных препаратов нет"
+        return "🩺 Активных препаратов пока нет.\nДобавьте первый кнопкой ниже."
     rows = [f"• {m.name} — {m.current_dose} мг (с {m.started_at.isoformat()})" for m in meds]
-    return "🩺 Активные:\n" + "\n".join(rows)
+    return "🩺 Активные препараты:\n" + "\n".join(rows)
 
 
 @router.message(Command("meds"))
@@ -86,39 +136,42 @@ async def cmd_meds(
 @router.callback_query(F.data == "meds:cancel")
 async def cb_cancel(cb: CallbackQuery, state: FSMContext):
     await state.clear()
-    await cb.message.edit_text("Отменено")
+    await cb.message.edit_text("Отменено.")
     await cb.answer()
 
 
-# --- Add flow ---
+# --- Add flow (2 questions: name → dose) ---
 
 
 @router.callback_query(F.data == "meds:add")
 async def cb_add(cb: CallbackQuery, state: FSMContext):
-    await state.set_state(MedsStates.add_key)
-    await cb.message.edit_text("Введи короткий ключ (slug, например `seizar`):")
+    await state.set_state(MedsStates.add_name)
+    await cb.message.edit_text("Как называется препарат? Например: Сейзар, Атаракс.")
     await cb.answer()
 
 
-@router.message(MedsStates.add_key, F.text)
-async def msg_add_key(message: Message, state: FSMContext):
-    await state.update_data(key=message.text.strip())
-    await state.set_state(MedsStates.add_name)
-    await message.answer("Полное название (например `Сейзар`):")
-
-
 @router.message(MedsStates.add_name, F.text)
-async def msg_add_name(message: Message, state: FSMContext):
-    await state.update_data(name=message.text.strip())
-    await state.set_state(MedsStates.add_label)
-    await message.answer("Заголовок колонки в mood_tracker (например `Сейзар` или `Гидр.К`):")
+async def msg_add_name(
+    message: Message,
+    state: FSMContext,
+    session_factory: async_sessionmaker[AsyncSession],
+):
+    name = message.text.strip()
+    slug = _slugify(name)
 
+    async with session_factory() as session:
+        existing = await session.get(MedActive, slug)
+        if existing is not None and existing.archived_at is None:
+            await message.answer(
+                f"⚠️ Препарат «{existing.name}» уже активен.\n"
+                "Если нужно изменить дозу — /meds → ✏️ Изменить дозу."
+            )
+            await state.clear()
+            return
 
-@router.message(MedsStates.add_label, F.text)
-async def msg_add_label(message: Message, state: FSMContext):
-    await state.update_data(label=message.text.strip())
+    await state.update_data(name=name, slug=slug)
     await state.set_state(MedsStates.add_dose)
-    await message.answer("Текущая доза (например `25` или `12.5`):")
+    await message.answer("Какая текущая доза в мг? Например: 25 или 12.5")
 
 
 @router.message(MedsStates.add_dose, F.text)
@@ -129,20 +182,21 @@ async def msg_add_dose(
     session_factory: async_sessionmaker[AsyncSession],
 ):
     data = await state.get_data()
+    dose = message.text.strip()
     today = datetime.now(ZoneInfo(settings.tz)).date()
     async with session_factory() as session:
         session.add(
             MedActive(
-                key=data["key"],
+                key=data["slug"],
                 name=data["name"],
-                column_label=data["label"],
-                current_dose=message.text.strip(),
+                column_label=data["name"],
+                current_dose=dose,
                 started_at=today,
             )
         )
         await session.commit()
     await state.clear()
-    await message.answer(f"✅ Добавил {data['name']} ({message.text.strip()})")
+    await message.answer(f"✅ Добавил «{data['name']}» — {dose} мг.")
 
 
 # --- Archive flow ---
@@ -158,10 +212,12 @@ async def cb_archive_pick(
             await session.scalars(select(MedActive).where(MedActive.archived_at.is_(None)))
         ).all()
     if not meds:
-        await cb.message.edit_text("Нет активных")
+        await cb.message.edit_text("Активных препаратов нет.")
         await cb.answer()
         return
-    await cb.message.edit_text("Какой архивировать?", reply_markup=_picklist_kb(meds, "archive"))
+    await cb.message.edit_text(
+        "Какой препарат архивировать?", reply_markup=_picklist_kb(meds, "archive")
+    )
     await cb.answer()
 
 
@@ -178,9 +234,9 @@ async def cb_archive_apply(
         if med:
             med.archived_at = today
             await session.commit()
-            await cb.message.edit_text(f"📦 Архивировал {med.name}")
+            await cb.message.edit_text(f"📦 Архивировал «{med.name}».")
         else:
-            await cb.message.edit_text("Не нашёл")
+            await cb.message.edit_text("⚠️ Не нашёл этот препарат.")
     await cb.answer()
 
 
@@ -197,10 +253,12 @@ async def cb_dose_pick(
             await session.scalars(select(MedActive).where(MedActive.archived_at.is_(None)))
         ).all()
     if not meds:
-        await cb.message.edit_text("Нет активных")
+        await cb.message.edit_text("Активных препаратов нет.")
         await cb.answer()
         return
-    await cb.message.edit_text("Кому менять дозу?", reply_markup=_picklist_kb(meds, "dose"))
+    await cb.message.edit_text(
+        "Какому препарату менять дозу?", reply_markup=_picklist_kb(meds, "dose")
+    )
     await cb.answer()
 
 
@@ -209,7 +267,7 @@ async def cb_dose_pick_med(cb: CallbackQuery, state: FSMContext):
     key = cb.data.split(":", 2)[2]
     await state.update_data(dose_key=key)
     await state.set_state(MedsStates.edit_dose_value)
-    await cb.message.edit_text("Новая доза:")
+    await cb.message.edit_text("Какая новая доза в мг?")
     await cb.answer()
 
 
@@ -225,7 +283,7 @@ async def msg_dose_value(
         if med:
             med.current_dose = message.text.strip()
             await session.commit()
-            await message.answer(f"✅ {med.name}: {med.current_dose}")
+            await message.answer(f"✅ «{med.name}»: {med.current_dose} мг.")
         else:
-            await message.answer("Не нашёл")
+            await message.answer("⚠️ Не нашёл препарат.")
     await state.clear()

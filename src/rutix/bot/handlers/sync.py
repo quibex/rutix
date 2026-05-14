@@ -33,11 +33,11 @@ async def cmd_sync(
             sha = await flush_day(session, github, target)
         except Exception as e:
             logger.exception("sync failed")
-            await message.answer(f"❌ /sync упал: {type(e).__name__}: {e}")
+            await message.answer(f"⚠️ /sync завершился ошибкой: {type(e).__name__}: {e}")
             return
     if sha:
-        await message.answer(f"✅ Закоммитил {target.isoformat()} → {sha[:7]}")
+        await message.answer(f"✅ Записал {target.isoformat()} в Obsidian. Коммит: {sha[:7]}")
     else:
         await message.answer(
-            f"⏭ Нечего коммитить за {target.isoformat()} (уже сделано или нет данных)"
+            f"⏭ За {target.isoformat()} нечего записывать (уже сделано или нет данных)."
         )

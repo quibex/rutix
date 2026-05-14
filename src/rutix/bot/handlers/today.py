@@ -38,7 +38,7 @@ async def cmd_today(
     lines = [f"📆 {day.isoformat()}\n"]
 
     if mood is None:
-        lines.append("📊 Трек ещё не делал — /track")
+        lines.append("📊 Трек за сегодня ещё не сделан — нажмите /track")
     else:
         if mood.mood is None:
             mood_str = "—"
@@ -47,7 +47,7 @@ async def cmd_today(
         else:
             mood_str = str(mood.mood)
         lines.append(
-            f"📊 Настр. {mood_str} · тревога {mood.anxiety} · "
+            f"📊 Настроение {mood_str} · тревога {mood.anxiety} · "
             f"раздр. {mood.irritability} · сон {mood.sleep_hours}ч"
         )
 
@@ -61,6 +61,6 @@ async def cmd_today(
             + "\n".join(f"• {m.name} — {m.kcal}" for m in meals)
         )
     else:
-        lines.append("\n🍽 Ничего не ел сегодня — /eat <что>")
+        lines.append("\n🍽 Сегодня ничего не записано — попробуйте /eat")
 
     await message.answer("\n".join(lines))

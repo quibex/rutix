@@ -23,7 +23,7 @@ from rutix.time_utils import subjective_today, yesterday_of
 
 logger = logging.getLogger(__name__)
 
-EVENING_PING_TEXT = "🌙 Не забыл /track за сегодня?"
+EVENING_PING_TEXT = "🌙 Напоминаю: вы ещё не делали /track за сегодня.\nЗаймёт минуту."
 
 
 async def send_evening_ping_if_needed(

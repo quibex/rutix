@@ -89,4 +89,4 @@ async def test_cmd_note_when_daily_missing(fake_message, fake_settings, fake_git
     fake_message.text = "/note hi"
     await cmd_note(fake_message, settings=fake_settings, github=fake_github)
     fake_github.write.assert_not_called()
-    assert "нет файла" in fake_message.answer.call_args.args[0].lower()
+    assert "не найден" in fake_message.answer.call_args.args[0].lower()

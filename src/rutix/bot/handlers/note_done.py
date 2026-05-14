@@ -19,6 +19,12 @@ logger = logging.getLogger(__name__)
 router = Router(name="note_done")
 
 
+_USAGE_EXAMPLES = {
+    "note": "/note важная мысль или наблюдение",
+    "done": "/done закрыл задачу X",
+}
+
+
 async def _append_to_daily(
     message: Message,
     settings: Settings,
@@ -29,7 +35,7 @@ async def _append_to_daily(
 ):
     raw = (message.text or "").split(maxsplit=1)
     if len(raw) < 2 or not raw[1].strip():
-        await message.answer(f"Использование: /{cmd_name} <текст>")
+        await message.answer(f"Пример использования:\n{_USAGE_EXAMPLES[cmd_name]}")
         return
 
     text = raw[1].strip()
@@ -38,12 +44,12 @@ async def _append_to_daily(
 
     file = await github.read(path)
     if file is None:
-        await message.answer(f"❌ Нет файла {path}. Создай его сначала в Obsidian.")
+        await message.answer(f"⚠️ Файл {path} не найден.\nПроверьте что он создан в Obsidian.")
         return
 
     new_text = appender(file.text, text)
     if new_text == file.text:
-        await message.answer("⏭ Без изменений")
+        await message.answer("⏭ Без изменений (видимо, такая запись уже есть).")
         return
 
     sha = await github.write(
@@ -52,7 +58,7 @@ async def _append_to_daily(
         f"{cmd_name}({day.isoformat()}): {text[:60]}",
         sha=file.sha,
     )
-    await message.answer(f"✅ Добавил в «{section_label}» ({sha[:7]})")
+    await message.answer(f"✅ Добавил в «{section_label}». Коммит: {sha[:7]}")
 
 
 @router.message(Command("note"))

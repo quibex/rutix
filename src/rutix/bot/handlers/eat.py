@@ -45,7 +45,7 @@ async def cmd_eat(
 ):
     raw = (message.text or "").split(maxsplit=1)
     if len(raw) < 2 or not raw[1].strip():
-        await message.answer("Использование: /eat <что съел>\nПример: /eat шаурма + кола")
+        await message.answer("Пример использования:\n/eat шаурма + кола 0.5")
         return
 
     food_text = raw[1].strip()
@@ -53,29 +53,30 @@ async def cmd_eat(
     day = subjective_today(now, settings.tz)
     slot = _slot_for_time(now)
 
-    # Fetch reference + daily file
     reference = await github.read(REFERENCE_PATH)
     reference_text = reference.text if reference else ""
 
     daily_path = f"daily/{day.isoformat()}.md"
     daily_file = await github.read(daily_path)
     if daily_file is None:
-        await message.answer(f"❌ Нет файла {daily_path}. Создай его сначала в Obsidian.")
+        await message.answer(
+            f"⚠️ Файл {daily_path} не найден в репозитории.\nПроверьте что он создан в Obsidian."
+        )
         return
 
-    # Parse via Claude
     try:
         items = await claude.parse_eat(food_text, reference_md=reference_text)
     except ValueError as e:
         logger.exception("Claude parse failed")
-        await message.answer(f"❌ Не смог распарсить: {e}. Попробуй переписать.")
+        await message.answer(
+            f"⚠️ Не получилось разобрать ответ модели: {e}\nПопробуйте переформулировать."
+        )
         return
 
     if not items:
-        await message.answer("⚠️ Claude вернул пустой список. Попробуй уточнить.")
+        await message.answer("⚠️ Модель вернула пустой список. Попробуйте уточнить, что вы съели.")
         return
 
-    # Apply slot to all items + append to daily
     new_text = daily_file.text
     for item in items:
         item.slot = slot
@@ -88,7 +89,6 @@ async def cmd_eat(
         sha=daily_file.sha,
     )
 
-    # Build reply
     added_lines = [
         f"• {it.name} — {_format_kbju(it.kcal, it.protein, it.fat, it.carbs)}" for it in items
     ]
@@ -97,9 +97,9 @@ async def cmd_eat(
     total_f = sum(it.fat for it in items)
     total_c = sum(it.carbs for it in items)
     reply = (
-        f"✅ Добавил в {slot}:\n"
+        f"✅ Записал в «{slot}»:\n"
         + "\n".join(added_lines)
         + f"\n\nИтого добавлено: {_format_kbju(total_kcal, total_p, total_f, total_c)}\n"
-        f"Файл: {sha[:7]}"
+        f"Коммит: {sha[:7]}"
     )
     await message.answer(reply)
