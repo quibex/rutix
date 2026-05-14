@@ -11,6 +11,7 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY src ./src
 COPY alembic ./alembic
 COPY alembic.ini ./
+COPY prompts ./prompts
 ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app/src
 CMD ["sh", "-c", "alembic upgrade head && python -m rutix"]

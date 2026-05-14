@@ -1,0 +1,11 @@
+services:
+  bot:
+    image: ghcr.io/quibex/rutix:latest
+    container_name: rutix-bot
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=sqlite+aiosqlite:///data/bot.db
