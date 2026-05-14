@@ -1,5 +1,4 @@
 """Configuration via env vars (validated by pydantic-settings)."""
-
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -15,14 +14,12 @@ class Settings(BaseSettings):
     bot_token: str = Field(...)
     telegram_user_id: int = Field(...)
     github_api_token: str = Field(...)
+    anthropic_api_key: str = Field(...)
+    todoist_token: str = Field(...)
 
     life_repo: str = Field(default="quibex/life")
     database_url: str = Field(default="sqlite+aiosqlite:///data/bot.db")
     tz: str = Field(default="Europe/Moscow")
-
-    # Reserved for Phase 2 — declared so tests don't fail when present in .env
-    anthropic_api_key: str = Field(default="")
-    todoist_token: str = Field(default="")
 
 
 def load_settings() -> Settings:
