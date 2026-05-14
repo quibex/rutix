@@ -82,32 +82,57 @@ async def test_parse_eat_returns_meal_items(claude, fake_anthropic):
     assert call_kwargs["messages"][0]["content"] == "шаурма + кола"
 
 
-async def test_parse_eat_accepts_messages_history(claude, fake_anthropic):
+async def test_parse_eat_with_current_items_prefixes_explicit_state(claude, fake_anthropic):
+    """When current_items is given, the user message should embed an explicit state block."""
     payload = {
         "items": [
             {
-                "name": "Картошка",
-                "kcal": 250,
-                "protein": 5,
-                "fat": 8,
-                "carbs": 40,
-                "source": "estimate",
-            }
+                "name": "Котлета",
+                "kcal": 392,
+                "protein": 26,
+                "fat": 19,
+                "carbs": 30,
+                "source": "reference",
+            },
+            {
+                "name": "Чиабатта",
+                "kcal": 603,
+                "protein": 18.9,
+                "fat": 33.8,
+                "carbs": 55.9,
+                "source": "reference",
+            },
         ]
     }
     fake_anthropic.messages.create.return_value = MagicMock(
         content=[_text_block(json.dumps(payload))]
     )
 
-    history = [
-        {"role": "user", "content": "шаурма"},
-        {"role": "assistant", "content": '{"items": [...]}'},
-        {"role": "user", "content": "нет, картошка"},
+    current = [
+        {"name": "Котлета", "kcal": 392, "protein": 26, "fat": 19, "carbs": 30, "source": "reference"}
     ]
-    items = await claude.parse_eat(history, reference_md="")
-    assert items == [MealItem("", "Картошка", 250, 5.0, 8.0, 40.0, source="estimate")]
-    # Messages were forwarded as-is
-    assert fake_anthropic.messages.create.call_args.kwargs["messages"] == history
+    await claude.parse_eat("ещё чиабатта", reference_md="", current_items=current)
+
+    call_kwargs = fake_anthropic.messages.create.call_args.kwargs
+    user_content = call_kwargs["messages"][0]["content"]
+    assert isinstance(user_content, str)
+    assert "ТЕКУЩИЙ СПИСОК" in user_content
+    assert "Котлета" in user_content
+    assert "ещё чиабатта" in user_content
+
+
+async def test_parse_eat_no_current_items_sends_plain_text(claude, fake_anthropic):
+    """Without current_items, user message is just the new input — no state prefix."""
+    payload = {"items": []}
+    fake_anthropic.messages.create.return_value = MagicMock(
+        content=[_text_block(json.dumps(payload))]
+    )
+
+    await claude.parse_eat("шаурма", reference_md="")
+
+    user_content = fake_anthropic.messages.create.call_args.kwargs["messages"][0]["content"]
+    assert user_content == "шаурма"
+    assert "ТЕКУЩИЙ СПИСОК" not in user_content
 
 
 async def test_parse_eat_raises_on_malformed_json(claude, fake_anthropic):

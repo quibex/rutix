@@ -36,20 +36,24 @@ class ClaudeClient:
         self._sdk = sdk_client or AsyncAnthropic(api_key=api_key)
 
     async def parse_eat(
-        self, text_or_messages: str | list[dict], reference_md: str
+        self,
+        new_input: str | list[dict],
+        reference_md: str,
+        current_items: list[dict] | None = None,
     ) -> list[MealItem]:
         """Parse food text into MealItems.
 
-        `text_or_messages` is either a string (single user turn) or a list of
-        `{role, content}` dicts (multi-turn — used by the refine flow so Claude
-        can see prior parses and treat new turns as corrections, not additions).
+        `new_input` is either a string (text-only turn) or a list of content
+        blocks (multimodal — text + image blocks).
+
+        `current_items` is the list of already-parsed items from prior turns
+        in the same session. When non-empty, it's prepended to the user message
+        as a "ТЕКУЩИЙ СПИСОК:" block so Claude treats the new turn as an
+        update to that explicit state (rather than inferring from chat history).
+        This avoids the conversation-history ambiguity that was causing items
+        to silently disappear on follow-up turns.
         """
         eat_prompt = (self.prompts_dir / "eat.md").read_text(encoding="utf-8")
-
-        if isinstance(text_or_messages, str):
-            messages = [{"role": "user", "content": text_or_messages}]
-        else:
-            messages = text_or_messages
 
         # Stable system prompt — eligible for prompt caching (Sonnet 4.6 min 2048 tok).
         # Reference rarely changes, so most /eat calls hit the cache.
@@ -61,13 +65,33 @@ class ClaudeClient:
             }
         ]
 
+        # Build the user message: optionally prefix with explicit current state,
+        # then the new input (text or multimodal blocks).
+        state_prefix = ""
+        if current_items:
+            state_prefix = (
+                "ТЕКУЩИЙ СПИСОК (что уже распарсено в этой сессии):\n"
+                + json.dumps({"items": current_items}, ensure_ascii=False, indent=2)
+                + "\n\nНОВОЕ СООБЩЕНИЕ ОТ ПОЛЬЗОВАТЕЛЯ:\n"
+            )
+
+        if isinstance(new_input, str):
+            user_content = (state_prefix + new_input) if state_prefix else new_input
+        else:
+            # Multimodal: prepend state prefix as a text block before image blocks
+            user_content = (
+                ([{"type": "text", "text": state_prefix}] + new_input)
+                if state_prefix
+                else new_input
+            )
+
         response = await self._sdk.messages.create(
             model=self.model,
             max_tokens=DEFAULT_MAX_TOKENS,
             thinking={"type": "adaptive"},
             output_config={"effort": "high"},
             system=system_blocks,
-            messages=messages,
+            messages=[{"role": "user", "content": user_content}],
         )
 
         # With adaptive thinking, response.content interleaves thinking + text blocks.

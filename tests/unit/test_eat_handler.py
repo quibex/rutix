@@ -124,11 +124,10 @@ async def test_cmd_eat_shows_preview_with_buttons_does_not_write(
     assert "Шаурма" in preview_text
     assert "450" in preview_text
     assert "reply_markup" in edit_kwargs
-    # State has the items + history seeded
+    # State has the items saved (current_items model — no growing history)
     fake_state.update_data.assert_awaited()
     saved = fake_state.update_data.call_args.kwargs
     assert any(it["name"] == "Шаурма" for it in saved["items"])
-    assert len(saved["history"]) == 2  # user + assistant
 
 
 async def test_cb_ok_writes_to_daily(fake_state, fake_github, fake_settings):

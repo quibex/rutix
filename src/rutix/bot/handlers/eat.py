@@ -1,23 +1,24 @@
-"""/eat — open a session, add foods (text or photo), confirm to write.
+"""/eat — open a session, add foods (text or photos), confirm to write.
 
 Flow:
 1. `/eat` (alone) opens an empty session, bot says "пишите".
 2. `/eat <text>` or photo (with no active state) opens a session AND parses
    the first input immediately.
-3. Inside the session, every text/photo is fed to Claude as a new turn —
-   model is told to return the **full current list** (add / replace / remove /
-   adjust portion based on context).
-4. After each turn, bot edits the same preview message with the updated parse
-   and ✅ Записать / ❌ Отменить buttons.
-5. ✅: writes to today's daily Питание section. Estimates (items not in
-   reference.md) are appended to nutrition/reference.md under
-   «## Из бота (требует проверки)».
-6. ❌: clears state.
+3. Inside the session, every text/photo is fed to Claude WITH the current
+   parsed list (explicit state) — model is told to update that list with
+   the new turn (add / replace / remove / adjust).
+4. Telegram albums (multi-photo messages) are buffered by media_group_id
+   and processed as one input.
+5. After each turn, bot edits the same preview message with the updated
+   parse and ✅ Записать / ❌ Отменить buttons.
+6. ✅: writes to today's daily Питание section. Estimates are also appended
+   to nutrition/reference.md under «## Из бота (требует проверки)».
+7. ❌: clears state.
 """
 
+import asyncio
 import base64
 import io
-import json
 import logging
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
@@ -45,6 +46,11 @@ router = Router(name="eat")
 
 REFERENCE_PATH = "nutrition/reference.md"
 REFERENCE_BOT_SECTION = "## Из бота (требует проверки)"
+ALBUM_DEBOUNCE_SECONDS = 1.5
+
+# Buffer photos by media_group_id so albums (multi-photo messages) collapse
+# into a single Claude call. Module-level dict — single bot process.
+_album_buffers: dict[str, list[Message]] = {}
 
 
 class EatStates(StatesGroup):
@@ -131,20 +137,23 @@ async def _download_photo_b64(bot: Bot, file_id: str) -> str:
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-def _build_user_content(text: str, image_b64: str | None) -> str | list[dict]:
-    if image_b64 is None:
+def _build_user_input(text: str, image_b64s: list[str]) -> str | list[dict]:
+    """Build user_input for ClaudeClient.parse_eat:
+
+    - text-only: returns str
+    - has images: returns list of content blocks (images + final text block)
+    """
+    if not image_b64s:
         return text
-    return [
+    blocks = [
         {
             "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": "image/jpeg",
-                "data": image_b64,
-            },
-        },
-        {"type": "text", "text": text or "Что на фото? Распарси КБЖУ."},
+            "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
+        }
+        for b64 in image_b64s
     ]
+    blocks.append({"type": "text", "text": text or "Что на фото? Распарси КБЖУ."})
+    return blocks
 
 
 # --- Session lifecycle ---
@@ -157,7 +166,6 @@ async def _open_session(message: Message, state: FSMContext, settings: Settings)
     slot = _slot_for_time(now)
     data = {
         "items": [],
-        "history": [],
         "slot": slot,
         "day": day.isoformat(),
         "preview_chat_id": None,
@@ -175,24 +183,23 @@ async def _process_input(
     github: GitHubClient,
     claude: ClaudeClient,
     text: str,
-    image_b64: str | None,
+    image_b64s: list[str],
 ):
-    """Append the new turn to history, re-parse, edit the preview message.
+    """Append the new turn to current state, re-parse with explicit current_items.
 
-    Works for both first turn (history empty) and subsequent refinements.
+    Edits the preview message in place if one exists.
     """
     data = await state.get_data()
     if not data:
-        # Defensive — shouldn't happen because we set state before this is called
         data = await _open_session(message, state, settings)
 
-    history = list(data.get("history", []))
+    current_items = list(data.get("items", []))
     slot = data.get("slot", "Перекус")
     day_iso = data.get("day")
     preview_chat_id = data.get("preview_chat_id")
     preview_message_id = data.get("preview_message_id")
 
-    # Sanity check: daily file must exist before we burn Claude tokens
+    # Sanity check before burning Claude tokens
     daily_path = f"daily/{day_iso}.md"
     daily_file = await github.read(daily_path)
     if daily_file is None:
@@ -203,9 +210,7 @@ async def _process_input(
         await state.clear()
         return
 
-    # Append the new user turn
-    user_content = _build_user_content(text, image_b64)
-    history.append({"role": "user", "content": user_content})
+    user_input = _build_user_input(text, image_b64s)
 
     thinking_msg = await message.answer("🤔 Разбираю…")
 
@@ -213,7 +218,11 @@ async def _process_input(
     reference_text = reference.text if reference else ""
 
     try:
-        items = await claude.parse_eat(history, reference_md=reference_text)
+        items = await claude.parse_eat(
+            user_input,
+            reference_md=reference_text,
+            current_items=current_items if current_items else None,
+        )
     except ValueError as e:
         logger.exception("Claude parse failed")
         await thinking_msg.edit_text(
@@ -227,13 +236,9 @@ async def _process_input(
         return
 
     items_dump = _items_to_dump(items)
-    history.append(
-        {"role": "assistant", "content": json.dumps({"items": items_dump}, ensure_ascii=False)}
-    )
-
-    # Update or create the preview message. We try to edit the previous preview;
-    # the "thinking" message is then deleted to avoid clutter.
     preview_text = _format_preview(items, slot)
+
+    # Try to edit the existing preview message; fall back to using the thinking msg.
     if preview_chat_id and preview_message_id:
         try:
             await message.bot.edit_message_text(
@@ -244,8 +249,6 @@ async def _process_input(
             )
             await thinking_msg.delete()
         except Exception:
-            # If editing failed (message too old, deleted, etc.), fall back to
-            # the thinking message
             await thinking_msg.edit_text(preview_text, reply_markup=_confirm_keyboard())
             preview_chat_id = thinking_msg.chat.id
             preview_message_id = thinking_msg.message_id
@@ -256,12 +259,56 @@ async def _process_input(
 
     await state.update_data(
         items=items_dump,
-        history=history,
         slot=slot,
         day=day_iso,
         preview_chat_id=preview_chat_id,
         preview_message_id=preview_message_id,
     )
+
+
+# --- Album buffering (Telegram sends album photos as separate updates) ---
+
+
+async def _collect_album_photos(message: Message, bot: Bot) -> tuple[list[str], str]:
+    """If `message` is part of an album, wait briefly for siblings and download all.
+    Otherwise return just this photo. Returns (image_b64s, caption).
+
+    Caller invokes this from the *first* photo handler call for a given album;
+    later sibling calls early-return via the buffer check before reaching here.
+    """
+    gid = message.media_group_id
+    if not gid:
+        b64 = await _download_photo_b64(bot, message.photo[-1].file_id)
+        return [b64], (message.caption or "").strip()
+
+    # Mark first arrival so siblings know to buffer-and-bail
+    _album_buffers[gid] = [message]
+    await asyncio.sleep(ALBUM_DEBOUNCE_SECONDS)
+    siblings = _album_buffers.pop(gid, [message])
+
+    image_b64s = []
+    for m in siblings:
+        b64 = await _download_photo_b64(bot, m.photo[-1].file_id)
+        image_b64s.append(b64)
+    caption = next((m.caption.strip() for m in siblings if m.caption), "")
+    return image_b64s, caption
+
+
+def _is_album_sibling(message: Message) -> bool:
+    """True if this is a follow-up photo of an already-buffered album.
+
+    The first photo of the album gets here when the buffer is still empty
+    (we set it inside _collect_album_photos). Subsequent photos see a non-empty
+    buffer — append to it and bail; the first call's debounced sleep will
+    pick them up.
+    """
+    gid = message.media_group_id
+    if not gid:
+        return False
+    if gid in _album_buffers:
+        _album_buffers[gid].append(message)
+        return True
+    return False
 
 
 # --- /eat command ---
@@ -278,12 +325,11 @@ async def cmd_eat(
     raw = (message.text or "").split(maxsplit=1)
     food_text = raw[1].strip() if len(raw) > 1 else ""
 
-    # Reset any prior session and open a fresh one
     await state.clear()
     data = await _open_session(message, state, settings)
 
     if not food_text:
-        # Empty session — just send the prompt-for-input message and store its id
+        # Empty session — wait for input
         msg = await message.answer(
             _format_preview([], data["slot"]),
             reply_markup=_confirm_keyboard(),
@@ -291,8 +337,7 @@ async def cmd_eat(
         await state.update_data(preview_chat_id=msg.chat.id, preview_message_id=msg.message_id)
         return
 
-    # Has text — parse immediately
-    await _process_input(message, state, settings, github, claude, text=food_text, image_b64=None)
+    await _process_input(message, state, settings, github, claude, text=food_text, image_b64s=[])
 
 
 # --- Photo as session opener (no state) ---
@@ -308,16 +353,17 @@ async def msg_eat_photo(
     bot: Bot,
 ):
     """Photo (with optional caption) outside any session opens a fresh /eat session."""
-    photo = message.photo[-1]
-    image_b64 = await _download_photo_b64(bot, photo.file_id)
-    caption = (message.caption or "").strip()
+    if _is_album_sibling(message):
+        return  # buffered for the first-arrival handler to pick up
+
+    image_b64s, caption = await _collect_album_photos(message, bot)
     if caption.lower().startswith("/eat"):
         caption = caption[4:].strip()
 
     await state.clear()
     await _open_session(message, state, settings)
     await _process_input(
-        message, state, settings, github, claude, text=caption, image_b64=image_b64
+        message, state, settings, github, claude, text=caption, image_b64s=image_b64s
     )
 
 
@@ -333,11 +379,12 @@ async def msg_session_photo(
     claude: ClaudeClient,
     bot: Bot,
 ):
-    photo = message.photo[-1]
-    image_b64 = await _download_photo_b64(bot, photo.file_id)
-    caption = (message.caption or "").strip()
+    if _is_album_sibling(message):
+        return
+
+    image_b64s, caption = await _collect_album_photos(message, bot)
     await _process_input(
-        message, state, settings, github, claude, text=caption, image_b64=image_b64
+        message, state, settings, github, claude, text=caption, image_b64s=image_b64s
     )
 
 
@@ -352,7 +399,7 @@ async def msg_session_text(
     text = message.text.strip()
     if not text:
         return
-    await _process_input(message, state, settings, github, claude, text=text, image_b64=None)
+    await _process_input(message, state, settings, github, claude, text=text, image_b64s=[])
 
 
 # --- Confirm / cancel ---
