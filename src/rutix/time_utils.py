@@ -1,9 +1,33 @@
 """Time helpers — subjective day, week ids, weekday checks."""
 
+import re
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 EARLY_MORNING_BOUNDARY = time(3, 0)
+
+_DAY_HINT_OFFSETS = {
+    "сегодня": 0,
+    "вчера": -1,
+    "позавчера": -2,
+}
+_DAY_HINT_RE = re.compile(
+    r"^\s*(сегодня|вчера|позавчера)\b[\s,:.\-—]*",
+    re.IGNORECASE,
+)
+
+
+def extract_day_hint(text: str, today: date) -> tuple[date, str]:
+    """Detect a leading Russian day word ("вчера", "позавчера", "сегодня")
+    and return (resolved_day, text_without_hint).
+
+    Returns `(today, text)` unchanged if no hint is found.
+    """
+    m = _DAY_HINT_RE.match(text)
+    if not m:
+        return today, text
+    offset = _DAY_HINT_OFFSETS[m.group(1).lower()]
+    return today + timedelta(days=offset), text[m.end() :]
 
 
 def subjective_today(now: datetime, tz: str = "Europe/Moscow") -> date:

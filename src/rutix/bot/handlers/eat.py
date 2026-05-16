@@ -38,7 +38,7 @@ from rutix.integrations.claude import ClaudeClient
 from rutix.integrations.github import GitHubClient
 from rutix.markdown.daily import MealItem, append_meal
 from rutix.settings import Settings
-from rutix.time_utils import subjective_today
+from rutix.time_utils import extract_day_hint, subjective_today
 
 logger = logging.getLogger(__name__)
 
@@ -86,15 +86,16 @@ def _confirm_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def _format_preview(items: list[MealItem], slot: str) -> str:
+def _format_preview(items: list[MealItem], slot: str, day_label: str = "") -> str:
+    suffix = f" за {day_label}" if day_label else ""
     if not items:
         return (
-            f"📝 Сессия записи открыта (слот «{slot}»).\n\n"
+            f"📝 Сессия записи открыта (слот «{slot}»{suffix}).\n\n"
             "Пишите блюда текстом или кидайте фото. "
             "Можно несколько сообщений подряд — я буду накапливать.\n\n"
             "Когда всё перечислили — нажмите ✅."
         )
-    lines = [f"📋 Текущий список «{slot}»:\n"]
+    lines = [f"📋 Текущий список «{slot}»{suffix}:\n"]
     for it in items:
         marker = " 🆕" if it.source == "estimate" else ""
         lines.append(f"• {it.name}{marker} — {_format_kbju(it.kcal, it.protein, it.fat, it.carbs)}")
@@ -199,6 +200,48 @@ async def _process_input(
     preview_chat_id = data.get("preview_chat_id")
     preview_message_id = data.get("preview_message_id")
 
+    # First-turn day hint: "/eat вчера ..." retargets the day. Don't re-parse
+    # the hint on later turns — that would let mid-session text accidentally
+    # bump the date around.
+    day_changed = False
+    if not current_items and text:
+        today = subjective_today(datetime.now(ZoneInfo(settings.tz)), settings.tz)
+        resolved_day, text = extract_day_hint(text, today)
+        text = text.strip()
+        if resolved_day != today:
+            day_iso = resolved_day.isoformat()
+            # Past-day entries have no meaningful time-of-day slot — default to «Перекус».
+            slot = "Перекус"
+            day_changed = True
+
+    day_label = (
+        day_iso
+        if day_iso != subjective_today(datetime.now(ZoneInfo(settings.tz)), settings.tz).isoformat()
+        else ""
+    )
+
+    # If only a day hint was supplied (e.g. "/eat вчера"), nothing to parse —
+    # save the new day/slot and show the empty-session preview.
+    if not text and not image_b64s:
+        await state.update_data(items=[], slot=slot, day=day_iso)
+        if day_changed and preview_chat_id and preview_message_id:
+            try:
+                await message.bot.edit_message_text(
+                    _format_preview([], slot, day_label),
+                    chat_id=preview_chat_id,
+                    message_id=preview_message_id,
+                    reply_markup=_confirm_keyboard(),
+                )
+                return
+            except Exception:
+                pass
+        msg = await message.answer(
+            _format_preview([], slot, day_label),
+            reply_markup=_confirm_keyboard(),
+        )
+        await state.update_data(preview_chat_id=msg.chat.id, preview_message_id=msg.message_id)
+        return
+
     # Sanity check before burning Claude tokens
     daily_path = f"daily/{day_iso}.md"
     daily_file = await github.read(daily_path)
@@ -236,7 +279,7 @@ async def _process_input(
         return
 
     items_dump = _items_to_dump(items)
-    preview_text = _format_preview(items, slot)
+    preview_text = _format_preview(items, slot, day_label)
 
     # Try to edit the existing preview message; fall back to using the thinking msg.
     if preview_chat_id and preview_message_id:
@@ -504,8 +547,10 @@ async def cb_ok(
     total_c = sum(it.carbs for it in items)
 
     word = "позицию" if len(items) == 1 else "позиций"
+    today = subjective_today(datetime.now(ZoneInfo(settings.tz)), settings.tz)
+    day_suffix = f" за {day.isoformat()}" if day != today else ""
     summary = (
-        f"✅ Записал в «{slot}» ({len(items)} {word}):\n"
+        f"✅ Записал в «{slot}»{day_suffix} ({len(items)} {word}):\n"
         + "\n".join(
             f"• {it.name} — {_format_kbju(it.kcal, it.protein, it.fat, it.carbs)}" for it in items
         )

@@ -3,6 +3,7 @@ from zoneinfo import ZoneInfo
 
 from rutix.time_utils import (
     days_of_week,
+    extract_day_hint,
     is_saturday,
     is_sunday,
     subjective_today,
@@ -76,3 +77,62 @@ def test_days_of_week_when_sunday_input():
     days = days_of_week(date(2026, 5, 17))  # Sunday
     assert days[0] == date(2026, 5, 11)
     assert days[6] == date(2026, 5, 17)
+
+
+TODAY = date(2026, 5, 16)
+
+
+def test_extract_day_hint_yesterday():
+    day, rest = extract_day_hint("вчера онигири, паста", TODAY)
+    assert day == date(2026, 5, 15)
+    assert rest == "онигири, паста"
+
+
+def test_extract_day_hint_day_before_yesterday():
+    day, rest = extract_day_hint("позавчера шаурма", TODAY)
+    assert day == date(2026, 5, 14)
+    assert rest == "шаурма"
+
+
+def test_extract_day_hint_today_is_noop_for_day_but_strips_word():
+    day, rest = extract_day_hint("сегодня борщ", TODAY)
+    assert day == TODAY
+    assert rest == "борщ"
+
+
+def test_extract_day_hint_case_insensitive():
+    day, rest = extract_day_hint("Вчера паста", TODAY)
+    assert day == date(2026, 5, 15)
+    assert rest == "паста"
+
+
+def test_extract_day_hint_with_comma_after():
+    day, rest = extract_day_hint("вчера, паста", TODAY)
+    assert day == date(2026, 5, 15)
+    assert rest == "паста"
+
+
+def test_extract_day_hint_only_hint():
+    day, rest = extract_day_hint("вчера", TODAY)
+    assert day == date(2026, 5, 15)
+    assert rest == ""
+
+
+def test_extract_day_hint_no_hint_leaves_text_intact():
+    day, rest = extract_day_hint("онигири с тунцом", TODAY)
+    assert day == TODAY
+    assert rest == "онигири с тунцом"
+
+
+def test_extract_day_hint_only_matches_at_start():
+    # "вчера" mid-sentence is part of the food description, not a date hint.
+    day, rest = extract_day_hint("ел вчера шаурму", TODAY)
+    assert day == TODAY
+    assert rest == "ел вчера шаурму"
+
+
+def test_extract_day_hint_does_not_match_prefix_of_other_word():
+    # "вчерашний" should not be treated as "вчера".
+    day, rest = extract_day_hint("вчерашний хлеб", TODAY)
+    assert day == TODAY
+    assert rest == "вчерашний хлеб"

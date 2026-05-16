@@ -204,3 +204,74 @@ async def test_cmd_eat_no_args_opens_empty_session(
     # Preview-empty message was sent
     reply_text = fake_message.answer.call_args.args[0]
     assert "Сессия" in reply_text or "сессия" in reply_text.lower()
+
+
+async def test_cmd_eat_vchera_routes_to_yesterdays_daily(
+    fake_message, fake_state, fake_github, fake_claude, fake_settings
+):
+    """`/eat вчера ...` should target yesterday's daily file, not today's,
+    strip the date hint before sending to Claude, and label the preview.
+    """
+    from rutix.time_utils import subjective_today
+
+    today = subjective_today(datetime.now(MSK), "Europe/Moscow")
+    yesterday = today.fromordinal(today.toordinal() - 1)
+
+    fake_github.read.side_effect = [
+        FileContent(text=DAILY, sha="dsha"),
+        FileContent(text="ref content", sha="rsha"),
+    ]
+    fake_claude.parse_eat.return_value = [MealItem("", "Онигири", 176, 3.9, 4.5, 30.0)]
+    fake_message.text = "/eat вчера онигири с тунцом вв"
+
+    await cmd_eat(
+        fake_message,
+        state=fake_state,
+        settings=fake_settings,
+        github=fake_github,
+        claude=fake_claude,
+    )
+
+    daily_path = fake_github.read.call_args_list[0].args[0]
+    assert daily_path == f"daily/{yesterday.isoformat()}.md"
+
+    claude_text = fake_claude.parse_eat.call_args.args[0]
+    assert not claude_text.lower().startswith("вчера")
+    assert "онигири" in claude_text.lower()
+
+    saved = fake_state.update_data.call_args.kwargs
+    assert saved["day"] == yesterday.isoformat()
+    assert saved["slot"] == "Перекус"
+
+    preview_text = fake_message._thinking_msg.edit_text.call_args.args[0]
+    assert yesterday.isoformat() in preview_text
+
+
+async def test_cmd_eat_vchera_alone_opens_empty_session_for_yesterday(
+    fake_message, fake_state, fake_github, fake_claude, fake_settings
+):
+    """`/eat вчера` (hint only, no food) should open an empty session
+    targeting yesterday — no Claude call, just the empty preview.
+    """
+    from rutix.time_utils import subjective_today
+
+    today = subjective_today(datetime.now(MSK), "Europe/Moscow")
+    yesterday = today.fromordinal(today.toordinal() - 1)
+
+    fake_message.text = "/eat вчера"
+
+    await cmd_eat(
+        fake_message,
+        state=fake_state,
+        settings=fake_settings,
+        github=fake_github,
+        claude=fake_claude,
+    )
+
+    fake_claude.parse_eat.assert_not_called()
+    fake_github.write.assert_not_called()
+
+    saved_calls = [c.kwargs for c in fake_state.update_data.call_args_list]
+    day_updates = [c for c in saved_calls if c.get("day") == yesterday.isoformat()]
+    assert day_updates, "expected state.update_data with yesterday's day"
+    assert any(c.get("slot") == "Перекус" for c in day_updates)

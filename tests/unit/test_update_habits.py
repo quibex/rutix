@@ -47,9 +47,10 @@ def fake_todoist():
 async def test_update_habits_marks_done_in_yesterday(fake_github, fake_todoist):
     fake_todoist.completed_titles_for_day.return_value = {"📚 Anki"}
 
-    sha = await update_habits(fake_github, fake_todoist, day=date(2026, 5, 13))
+    result = await update_habits(fake_github, fake_todoist, day=date(2026, 5, 13))
 
-    assert sha == "newsha"
+    assert result.sha == "newsha"
+    assert result.marked == ["📚 Anki"]
     fake_github.read.assert_awaited_once_with("daily/2026-05-13.md")
     written_text = fake_github.write.call_args.args[1]
     assert "- [x] 📚 Anki" in written_text
@@ -59,8 +60,9 @@ async def test_update_habits_marks_done_in_yesterday(fake_github, fake_todoist):
 async def test_update_habits_skips_when_no_completions(fake_github, fake_todoist):
     fake_todoist.completed_titles_for_day.return_value = set()
 
-    sha = await update_habits(fake_github, fake_todoist, day=date(2026, 5, 13))
-    assert sha is None
+    result = await update_habits(fake_github, fake_todoist, day=date(2026, 5, 13))
+    assert result.sha is None
+    assert result.marked == []
     fake_github.write.assert_not_called()
 
 
@@ -70,13 +72,26 @@ async def test_update_habits_skips_when_no_change(fake_github, fake_todoist):
     fake_github.read = AsyncMock(return_value=FileContent(text=pre, sha="x"))
     fake_todoist.completed_titles_for_day.return_value = {"📚 Anki"}
 
-    sha = await update_habits(fake_github, fake_todoist, day=date(2026, 5, 13))
-    assert sha is None
+    result = await update_habits(fake_github, fake_todoist, day=date(2026, 5, 13))
+    assert result.sha is None
+    assert result.marked == []
     fake_github.write.assert_not_called()
 
 
 async def test_update_habits_skips_when_daily_missing(fake_github, fake_todoist):
     fake_github.read = AsyncMock(return_value=None)
 
-    sha = await update_habits(fake_github, fake_todoist, day=date(2026, 5, 13))
-    assert sha is None
+    result = await update_habits(fake_github, fake_todoist, day=date(2026, 5, 13))
+    assert result.sha is None
+    assert result.marked == []
+
+
+async def test_update_habits_returns_only_newly_marked(fake_github, fake_todoist):
+    """Marked list should not include habits that were already [x] before the run."""
+    pre = DAILY.replace("- [ ] 📚 Anki", "- [x] 📚 Anki")
+    fake_github.read = AsyncMock(return_value=FileContent(text=pre, sha="x"))
+    fake_todoist.completed_titles_for_day.return_value = {"📚 Anki", "🌅 Skincare AM"}
+
+    result = await update_habits(fake_github, fake_todoist, day=date(2026, 5, 13))
+    assert result.sha == "newsha"
+    assert result.marked == ["🌅 Skincare AM"]
