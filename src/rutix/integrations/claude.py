@@ -61,6 +61,25 @@ EAT_SCHEMA = {
 }
 
 
+CLASSIFY_HABITS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "matched_habits": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Точные лейблы привычек, для которых нашлось совпадение",
+        },
+        "unmatched_completions": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Точные титлы Todoist-задач, не совпавших ни с одной привычкой",
+        },
+    },
+    "required": ["matched_habits", "unmatched_completions"],
+    "additionalProperties": False,
+}
+
+
 def _strip_markdown_fences(raw: str) -> str:
     """Defense-in-depth: even with output_config.format enforcement, occasionally
     a model can wrap JSON in ```json fences. Strip them if present.
@@ -188,3 +207,58 @@ class ClaudeClient:
             )
             for it in payload["items"]
         ]
+
+    async def classify_completions(
+        self,
+        habit_labels: list[str],
+        completions: list[str] | set[str],
+    ) -> tuple[set[str], list[str]]:
+        """Semantic match Todoist completions against habit labels.
+
+        Returns (matched, unmatched):
+        - `matched`: subset of `habit_labels` for which a Todoist completion
+          was found. Hallucinated labels (not present in input) are filtered out.
+        - `unmatched`: Todoist titles that didn't match any habit, preserving
+          model-emitted order.
+
+        Short-circuits without an API call when either input is empty:
+        - no habits → everything unmatched
+        - no completions → nothing matched, nothing unmatched
+        """
+        completions_list = list(completions)
+        if not habit_labels or not completions_list:
+            return set(), completions_list
+
+        prompt = (self.prompts_dir / "classify_habits.md").read_text(encoding="utf-8")
+
+        user_payload = json.dumps(
+            {"habits": habit_labels, "completions": completions_list},
+            ensure_ascii=False,
+            indent=2,
+        )
+
+        response = await self._sdk.messages.create(
+            model=self.model,
+            max_tokens=2048,
+            output_config={
+                "format": {"type": "json_schema", "schema": CLASSIFY_HABITS_SCHEMA},
+            },
+            system=[{"type": "text", "text": prompt}],
+            messages=[{"role": "user", "content": user_payload}],
+        )
+
+        text_blocks = [b.text for b in response.content if b.type == "text"]
+        raw = _strip_markdown_fences("\n".join(text_blocks).strip())
+        if not raw:
+            raise ValueError("Claude classify returned empty text")
+
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as e:
+            logger.error("Claude classify returned invalid JSON: %r", raw[:500])
+            raise ValueError(f"Claude classify не-JSON: {e}") from e
+
+        habit_set = set(habit_labels)
+        matched = {h for h in payload.get("matched_habits", []) if h in habit_set}
+        unmatched = [str(c) for c in payload.get("unmatched_completions", [])]
+        return matched, unmatched

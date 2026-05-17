@@ -5,6 +5,7 @@ from rutix.markdown.daily import (
     append_done,
     append_meal,
     append_note,
+    parse_habit_labels,
     parse_meals,
     update_habits_checked,
 )
@@ -108,6 +109,37 @@ def test_update_habits_preserves_already_checked():
 
 def test_update_habits_no_change_when_done_set_empty():
     assert update_habits_checked(SAMPLE, done=set()) == SAMPLE
+
+
+# --- parse_habit_labels ---
+
+
+def test_parse_habit_labels_returns_labels_in_order():
+    assert parse_habit_labels(SAMPLE) == [
+        "📚 Anki",
+        "🌅 Skincare AM",
+        "🌙 Skincare PM",
+        "🥤 Протеин",
+    ]
+
+
+def test_parse_habit_labels_includes_checked_and_unchecked():
+    # SAMPLE has both [ ] and [x] — already covered by the order test above,
+    # but assert explicitly: a label marked [x] is still returned.
+    assert "🌙 Skincare PM" in parse_habit_labels(SAMPLE)
+
+
+def test_parse_habit_labels_empty_section_returns_empty():
+    md = SAMPLE.replace(
+        "- [ ] 📚 Anki\n- [ ] 🌅 Skincare AM\n- [x] 🌙 Skincare PM\n- [ ] 🥤 Протеин",
+        "",
+    )
+    assert parse_habit_labels(md) == []
+
+
+def test_parse_habit_labels_raises_when_section_missing():
+    with pytest.raises(ValueError, match="Привычки"):
+        parse_habit_labels("# header\n\n## Заметки\n- x\n")
 
 
 # --- append_meal + parse_meals + totals ---

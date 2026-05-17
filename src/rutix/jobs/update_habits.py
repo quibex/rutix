@@ -1,14 +1,22 @@
-"""Daily 03:00 cron — fetch yesterday's Todoist completions, mark matching
-habits in yesterday's daily/*.md."""
+"""Daily 03:00 cron — pull yesterday's Todoist completions, split into:
+- matched habits → check the box in the daily file's `## Привычки`
+- the rest → append as bullets to `## Что сделано`
+
+Classification is delegated to Claude (semantic match across RU/EN/emoji).
+If the API call fails, falls back to byte-equal matching for habits and dumps
+everything that didn't match into `## Что сделано` — better partial update
+than skipping the day entirely.
+"""
 
 import logging
 import re
 from datetime import date
 from typing import NamedTuple
 
+from rutix.integrations.claude import ClaudeClient
 from rutix.integrations.github import GitHubClient
 from rutix.integrations.todoist import TodoistClient
-from rutix.markdown.daily import update_habits_checked
+from rutix.markdown.daily import append_done, parse_habit_labels, update_habits_checked
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +27,7 @@ _HABIT_LABEL_RE = re.compile(r"^\s*-\s*\[([ x])\]\s*(.+?)\s*$")
 class UpdateHabitsResult(NamedTuple):
     sha: str | None
     marked: list[str]
+    appended_done: list[str] = []
 
 
 def _checkbox_lines(text: str) -> list[str]:
@@ -26,6 +35,7 @@ def _checkbox_lines(text: str) -> list[str]:
 
 
 def _checked_habit_labels(md: str) -> set[str]:
+    """Return set of habit labels currently marked [x] in the ## Привычки section."""
     labels: set[str] = set()
     in_section = False
     for line in md.splitlines():
@@ -42,37 +52,86 @@ def _checked_habit_labels(md: str) -> set[str]:
     return labels
 
 
+def _exact_match_fallback(
+    habit_labels: list[str], completions: list[str]
+) -> tuple[set[str], list[str]]:
+    """Cheap fallback when Claude is unreachable: byte-equal match for habits,
+    everything else to `## Что сделано`."""
+    habit_set = set(habit_labels)
+    matched = {c for c in completions if c in habit_set}
+    unmatched = [c for c in completions if c not in matched]
+    return matched, unmatched
+
+
 async def update_habits(
     github: GitHubClient,
     todoist: TodoistClient,
+    claude: ClaudeClient,
     day: date,
 ) -> UpdateHabitsResult:
-    """Mark Todoist completions on `day`'s daily file. `marked` lists labels
-    that newly flipped to [x] in this run; `sha` is None on skip/no-op.
+    """Mark Todoist completions on `day`'s daily file.
+
+    `marked` lists habit labels that newly flipped to [x] in this run (excludes
+    those already checked before). `appended_done` lists Todoist titles
+    appended to `## Что сделано`. `sha` is None on skip/no-op.
     """
-    done = await todoist.completed_titles_for_day(day)
-    if not done:
+    done_titles = await todoist.completed_titles_for_day(day)
+    if not done_titles:
         logger.info("update_habits skipped — no completions for %s", day)
-        return UpdateHabitsResult(sha=None, marked=[])
+        return UpdateHabitsResult(sha=None, marked=[], appended_done=[])
 
     path = f"daily/{day.isoformat()}.md"
     file = await github.read(path)
     if file is None:
         logger.warning("update_habits skipped — no daily file for %s", day)
-        return UpdateHabitsResult(sha=None, marked=[])
+        return UpdateHabitsResult(sha=None, marked=[], appended_done=[])
 
-    new_text = update_habits_checked(file.text, done)
-    if _checkbox_lines(new_text) == _checkbox_lines(file.text):
-        logger.info("update_habits no-op — habits already checked for %s", day)
-        return UpdateHabitsResult(sha=None, marked=[])
+    try:
+        habit_labels = parse_habit_labels(file.text)
+    except ValueError:
+        logger.warning("update_habits — no ## Привычки section in %s, all → Что сделано", path)
+        habit_labels = []
+
+    completions = sorted(done_titles)
+
+    try:
+        matched, unmatched = await claude.classify_completions(habit_labels, completions)
+    except Exception:
+        logger.exception("claude.classify_completions failed — falling back to exact-string match")
+        matched, unmatched = _exact_match_fallback(habit_labels, completions)
+
+    new_text = update_habits_checked(file.text, matched)
+    appended_done: list[str] = []
+    for title in unmatched:
+        try:
+            candidate = append_done(new_text, title)
+        except ValueError:
+            logger.warning("no ## Что сделано section in %s — dropping %r", path, title)
+            break
+        if candidate != new_text:
+            new_text = candidate
+            appended_done.append(title)
+
+    # update_habits_checked may cause cosmetic whitespace diffs; gate on real
+    # semantic change (checkboxes flipped OR a bullet appended).
+    if _checkbox_lines(new_text) == _checkbox_lines(file.text) and not appended_done:
+        logger.info("update_habits no-op — nothing to change for %s", day)
+        return UpdateHabitsResult(sha=None, marked=[], appended_done=[])
 
     marked = sorted(_checked_habit_labels(new_text) - _checked_habit_labels(file.text))
+
+    msg_parts = []
+    if marked:
+        msg_parts.append(f"{len(marked)} привычек")
+    if appended_done:
+        msg_parts.append(f"{len(appended_done)} в Что сделано")
+    summary = " + ".join(msg_parts) if msg_parts else "no-op"
 
     sha = await github.write(
         path,
         new_text,
-        f"habits({day.isoformat()}): авто-запись из rutix-bot (Todoist)",
+        f"habits({day.isoformat()}): {summary} (Todoist)",
         sha=file.sha,
     )
-    logger.info("update_habits committed %s as %s (marked: %s)", day, sha, marked)
-    return UpdateHabitsResult(sha=sha, marked=marked)
+    logger.info("update_habits committed %s as %s (%s)", day, sha, summary)
+    return UpdateHabitsResult(sha=sha, marked=marked, appended_done=appended_done)

@@ -14,6 +14,7 @@ from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from rutix.db.models import MoodEntry
+from rutix.integrations.claude import ClaudeClient
 from rutix.integrations.github import GitHubClient
 from rutix.integrations.todoist import TodoistClient
 from rutix.jobs.flush_day import flush_day
@@ -57,13 +58,22 @@ def _fmt_update_habits_lines(
     if result.sha is None:
         return [f"⏭ update_habits за {target_iso}: нечего отмечать"]
     n = len(result.marked)
-    head = f"✅ update_habits за {target_iso}: отметил {n} {_habit_word(n)}{_fmt_sha(result.sha)}"
+    head = f"✅ update_habits за {target_iso}: отметил {n} {_habit_word(n)}"
+    m = len(result.appended_done)
+    if m:
+        head += f" + {m} в Что сделано"
+    head += _fmt_sha(result.sha)
     lines = [head]
     shown = result.marked[:_MAX_MARKED_IN_MESSAGE]
     for label in shown:
         lines.append(f"   • {label}")
     if len(result.marked) > _MAX_MARKED_IN_MESSAGE:
         lines.append(f"   … и ещё {len(result.marked) - _MAX_MARKED_IN_MESSAGE}")
+    shown_done = result.appended_done[:_MAX_MARKED_IN_MESSAGE]
+    for title in shown_done:
+        lines.append(f"   ↳ {title}")
+    if len(result.appended_done) > _MAX_MARKED_IN_MESSAGE:
+        lines.append(f"   ↳ … и ещё {len(result.appended_done) - _MAX_MARKED_IN_MESSAGE}")
     return lines
 
 
@@ -119,6 +129,7 @@ def make_scheduler(
     session_factory: async_sessionmaker[AsyncSession],
     github: GitHubClient,
     todoist: TodoistClient,
+    claude: ClaudeClient,
     bot: Bot,
     telegram_user_id: int,
     tz: str,
@@ -143,7 +154,7 @@ def make_scheduler(
                 flush_day_outcome = e
 
         try:
-            update_habits_outcome = await update_habits(github, todoist, target)
+            update_habits_outcome = await update_habits(github, todoist, claude, target)
             logger.info("update_habits result: %s", update_habits_outcome)
         except Exception as e:
             logger.exception("update_habits failed")

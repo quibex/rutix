@@ -30,6 +30,7 @@ def claude(tmp_path, fake_anthropic, monkeypatch):
     prompts_dir = tmp_path / "prompts"
     prompts_dir.mkdir()
     (prompts_dir / "eat.md").write_text("EAT_SYSTEM\n", encoding="utf-8")
+    (prompts_dir / "classify_habits.md").write_text("CLASSIFY_SYSTEM\n", encoding="utf-8")
     return ClaudeClient(
         api_key="sk-ant-test",
         prompts_dir=prompts_dir,
@@ -202,3 +203,83 @@ async def test_parse_eat_filters_out_thinking_blocks(claude, fake_anthropic):
 
     items = await claude.parse_eat("nothing", reference_md="")
     assert items == []
+
+
+# --- classify_completions ---
+
+
+async def test_classify_completions_returns_matched_and_unmatched(claude, fake_anthropic):
+    payload = {
+        "matched_habits": ["🥤 Протеин", "🌅 Skincare AM"],
+        "unmatched_completions": ["do the laundry", "Eng HW"],
+    }
+    fake_anthropic.messages.create.return_value = MagicMock(
+        content=[_text_block(json.dumps(payload))]
+    )
+
+    matched, unmatched = await claude.classify_completions(
+        habit_labels=["🥤 Протеин", "🌅 Skincare AM", "📚 Anki"],
+        completions=["🥤 Protein", "🌅 Skincare AM", "do the laundry", "Eng HW"],
+    )
+
+    assert matched == {"🥤 Протеин", "🌅 Skincare AM"}
+    assert unmatched == ["do the laundry", "Eng HW"]
+
+    call_kwargs = fake_anthropic.messages.create.call_args.kwargs
+    # Schema enforced at API layer
+    assert call_kwargs["output_config"]["format"]["type"] == "json_schema"
+    schema = call_kwargs["output_config"]["format"]["schema"]
+    assert "matched_habits" in schema["properties"]
+    assert "unmatched_completions" in schema["properties"]
+    # System prompt loaded from prompts/classify_habits.md and embeds inputs
+    system_text = call_kwargs["system"][0]["text"]
+    assert "CLASSIFY_SYSTEM" in system_text
+
+
+async def test_classify_completions_filters_hallucinated_habits(claude, fake_anthropic):
+    """If the model returns a 'matched' label that wasn't in the input habit list,
+    it's dropped — we don't want to write checkboxes for habits the user doesn't have."""
+    payload = {
+        "matched_habits": ["🌅 Skincare AM", "💪 Random hallucinated habit"],
+        "unmatched_completions": [],
+    }
+    fake_anthropic.messages.create.return_value = MagicMock(
+        content=[_text_block(json.dumps(payload))]
+    )
+
+    matched, unmatched = await claude.classify_completions(
+        habit_labels=["🌅 Skincare AM", "📚 Anki"],
+        completions=["🌅 Skincare AM"],
+    )
+
+    assert matched == {"🌅 Skincare AM"}
+    assert unmatched == []
+
+
+async def test_classify_completions_empty_inputs_skip_api(claude, fake_anthropic):
+    """No habits or no completions → no API call, return empty result."""
+    matched, unmatched = await claude.classify_completions(
+        habit_labels=[],
+        completions=["any task"],
+    )
+    assert matched == set()
+    assert unmatched == ["any task"]
+    fake_anthropic.messages.create.assert_not_called()
+
+    matched, unmatched = await claude.classify_completions(
+        habit_labels=["habit"],
+        completions=[],
+    )
+    assert matched == set()
+    assert unmatched == []
+    fake_anthropic.messages.create.assert_not_called()
+
+
+async def test_classify_completions_raises_on_malformed_json(claude, fake_anthropic):
+    fake_anthropic.messages.create.return_value = MagicMock(content=[_text_block("garbage")])
+
+    with pytest.raises(ValueError):
+        await claude.classify_completions(
+            habit_labels=["habit"],
+            completions=["task"],
+        )

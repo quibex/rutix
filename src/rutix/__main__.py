@@ -43,7 +43,7 @@ async def _run() -> None:
     dp["settings"] = settings
 
     scheduler = make_scheduler(
-        session_factory, github, todoist, bot, settings.telegram_user_id, settings.tz
+        session_factory, github, todoist, claude, bot, settings.telegram_user_id, settings.tz
     )
     scheduler.start()
 

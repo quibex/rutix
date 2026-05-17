@@ -100,6 +100,21 @@ def append_done(md: str, text: str) -> str:
 _HABIT_LINE_RE = re.compile(r"^(\s*-\s*\[)([ x])(\]\s*)(.+?)\s*$")
 
 
+def parse_habit_labels(md: str) -> list[str]:
+    """Return habit labels from the ## Привычки section, in source order.
+
+    Includes both checked ([x]) and unchecked ([ ]) habits — the config is the
+    same regardless of today's state.
+    """
+    body = _section_body(md, "Привычки")
+    labels: list[str] = []
+    for line in body.splitlines():
+        m = _HABIT_LINE_RE.match(line)
+        if m:
+            labels.append(m.group(4).strip())
+    return labels
+
+
 def update_habits_checked(md: str, done: set[str]) -> str:
     """Mark each habit whose label is in `done` as checked. Already-checked
     habits stay checked. Unmatched habits are untouched.
