@@ -50,13 +50,21 @@ def _habit_word(n: int) -> str:
     return "привычек"
 
 
+_SKIP_REASON_TEXT = {
+    "no_completions": "Todoist не вернул завершённых задач",
+    "no_daily_file": "нет daily-файла в репо",
+    "no_op": "нечего менять (всё уже отмечено)",
+}
+
+
 def _fmt_update_habits_lines(
     target_iso: str, result: "UpdateHabitsResult | Exception"
 ) -> list[str]:
     if isinstance(result, Exception):
         return [f"⚠️ update_habits за {target_iso}: ошибка — {type(result).__name__}: {result}"]
     if result.sha is None:
-        return [f"⏭ update_habits за {target_iso}: нечего отмечать"]
+        reason = _SKIP_REASON_TEXT.get(result.skip_reason or "", "нечего отмечать")
+        return [f"⏭ update_habits за {target_iso}: {reason}"]
     n = len(result.marked)
     head = f"✅ update_habits за {target_iso}: отметил {n} {_habit_word(n)}"
     m = len(result.appended_done)

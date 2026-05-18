@@ -22,7 +22,8 @@ def _ev(content: str, event_date: str, event_type: str = "completed") -> dict:
 
 @respx.mock
 async def test_completed_titles_filters_by_local_date(client):
-    """API ignores since/until — we filter client-side via event_date in MSK."""
+    """Even if the API ignores date_from/date_to, the client filters event_date
+    in MSK to the target day."""
     respx.get("https://api.todoist.com/api/v1/activities").mock(
         return_value=httpx.Response(
             200,
@@ -36,9 +37,10 @@ async def test_completed_titles_filters_by_local_date(client):
                     _ev("🌙 Skincare PM", "2026-05-13T22:00:00.000000Z"),
                     # dedupe — second Anki completion same day
                     _ev("📚 Anki", "2026-05-14T05:00:00.000000Z"),
-                    # different event type — OUT
+                    # different event type — OUT (defensive: API may return mixed types)
                     _ev("🥤 Protein", "2026-05-14T10:00:00.000000Z", event_type="updated"),
                 ],
+                "next_cursor": None,
             },
         )
     )
@@ -49,14 +51,75 @@ async def test_completed_titles_filters_by_local_date(client):
 
 
 @respx.mock
-async def test_request_uses_limit_param(client):
+async def test_request_sends_correct_query_params(client):
+    """Uses object_event_types (the param /api/v1/activities actually honors)
+    + the day window in UTC for date_from/date_to + limit clamped to API max 100."""
     route = respx.get("https://api.todoist.com/api/v1/activities").mock(
-        return_value=httpx.Response(200, json={"results": []})
+        return_value=httpx.Response(200, json={"results": [], "next_cursor": None})
     )
     await client.completed_titles_for_day(date(2026, 5, 14))
     params = dict(route.calls[0].request.url.params)
-    assert params["event_type"] == "completed"
-    assert params["limit"] == "200"
+    assert params["object_event_types"] == '["item:completed"]'
+    assert params["limit"] == "100"
+    # MSK is UTC+3 → day 2026-05-14 MSK = [2026-05-13T21:00Z, 2026-05-14T21:00Z)
+    assert params["date_from"] == "2026-05-13T21:00:00Z"
+    assert params["date_to"] == "2026-05-14T21:00:00Z"
+    assert "cursor" not in params  # first page
+    await client.aclose()
+
+
+@respx.mock
+async def test_paginates_via_next_cursor(client):
+    """When next_cursor is returned, the client paginates and merges results."""
+    route = respx.get("https://api.todoist.com/api/v1/activities").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json={
+                    "results": [_ev("📚 Anki", "2026-05-14T10:00:00Z")],
+                    "next_cursor": "page2",
+                },
+            ),
+            httpx.Response(
+                200,
+                json={
+                    "results": [_ev("🌅 Skincare AM", "2026-05-14T07:00:00Z")],
+                    "next_cursor": None,
+                },
+            ),
+        ]
+    )
+    titles = await client.completed_titles_for_day(date(2026, 5, 14))
+    assert titles == {"📚 Anki", "🌅 Skincare AM"}
+    assert route.call_count == 2
+    second_call_params = dict(route.calls[1].request.url.params)
+    assert second_call_params["cursor"] == "page2"
+    await client.aclose()
+
+
+@respx.mock
+async def test_pagination_stops_at_max_pages(client):
+    """Defensive cap — don't loop forever if the API keeps returning cursors."""
+    respx.get("https://api.todoist.com/api/v1/activities").mock(
+        return_value=httpx.Response(
+            200, json={"results": [_ev("x", "2026-05-14T10:00:00Z")], "next_cursor": "more"}
+        )
+    )
+    titles = await client.completed_titles_for_day(date(2026, 5, 14))
+    assert titles == {"x"}
+    # MAX_PAGES sanity — we stop after the cap regardless of cursor
+    assert respx.calls.call_count == client.MAX_PAGES
+    await client.aclose()
+
+
+@respx.mock
+async def test_pagination_stops_when_results_empty(client):
+    respx.get("https://api.todoist.com/api/v1/activities").mock(
+        return_value=httpx.Response(200, json={"results": [], "next_cursor": "x"})
+    )
+    titles = await client.completed_titles_for_day(date(2026, 5, 14))
+    assert titles == set()
+    assert respx.calls.call_count == 1
     await client.aclose()
 
 
@@ -94,7 +157,8 @@ async def test_skips_events_with_missing_extra_data(client):
                         "extra_data": {},
                     },
                     _ev("📚 Anki", "2026-05-14T12:00:00Z"),
-                ]
+                ],
+                "next_cursor": None,
             },
         )
     )

@@ -33,11 +33,33 @@ def test_summary_flush_day_skipped():
         today=THURSDAY,
         target=WEDNESDAY,
         flush_day_outcome=None,
-        update_habits_outcome=UpdateHabitsResult(sha=None, marked=[]),
+        update_habits_outcome=UpdateHabitsResult(sha=None, marked=[], skip_reason="no_completions"),
         flush_week_outcome=None,
     )
     assert "⏭ flush_day за 2026-05-13: пропущено" in summary
-    assert "⏭ update_habits за 2026-05-13: нечего отмечать" in summary
+    assert "⏭ update_habits за 2026-05-13: Todoist не вернул завершённых задач" in summary
+
+
+def test_summary_update_habits_no_daily_file():
+    summary = build_3am_summary(
+        today=THURSDAY,
+        target=WEDNESDAY,
+        flush_day_outcome="abc",
+        update_habits_outcome=UpdateHabitsResult(sha=None, marked=[], skip_reason="no_daily_file"),
+        flush_week_outcome=None,
+    )
+    assert "⏭ update_habits за 2026-05-13: нет daily-файла в репо" in summary
+
+
+def test_summary_update_habits_no_op():
+    summary = build_3am_summary(
+        today=THURSDAY,
+        target=WEDNESDAY,
+        flush_day_outcome="abc",
+        update_habits_outcome=UpdateHabitsResult(sha=None, marked=[], skip_reason="no_op"),
+        flush_week_outcome=None,
+    )
+    assert "⏭ update_habits за 2026-05-13: нечего менять (всё уже отмечено)" in summary
 
 
 def test_summary_flush_day_error_includes_exception():
@@ -116,9 +138,7 @@ def test_summary_habit_pluralization_five():
         today=THURSDAY,
         target=WEDNESDAY,
         flush_day_outcome="x",
-        update_habits_outcome=UpdateHabitsResult(
-            sha="y", marked=["a", "b", "c", "d", "e"]
-        ),
+        update_habits_outcome=UpdateHabitsResult(sha="y", marked=["a", "b", "c", "d", "e"]),
         flush_week_outcome=None,
     )
     assert "отметил 5 привычек" in summary

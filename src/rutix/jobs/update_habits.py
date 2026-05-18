@@ -28,6 +28,11 @@ class UpdateHabitsResult(NamedTuple):
     sha: str | None
     marked: list[str]
     appended_done: list[str] = []
+    # When sha is None: which branch fired. One of:
+    # - "no_completions" — Todoist returned 0 completions for the day
+    # - "no_daily_file"  — daily/<date>.md doesn't exist in repo
+    # - "no_op"          — completions exist but everything was already marked
+    skip_reason: str | None = None
 
 
 def _checkbox_lines(text: str) -> list[str]:
@@ -78,13 +83,17 @@ async def update_habits(
     done_titles = await todoist.completed_titles_for_day(day)
     if not done_titles:
         logger.info("update_habits skipped — no completions for %s", day)
-        return UpdateHabitsResult(sha=None, marked=[], appended_done=[])
+        return UpdateHabitsResult(
+            sha=None, marked=[], appended_done=[], skip_reason="no_completions"
+        )
 
     path = f"daily/{day.isoformat()}.md"
     file = await github.read(path)
     if file is None:
         logger.warning("update_habits skipped — no daily file for %s", day)
-        return UpdateHabitsResult(sha=None, marked=[], appended_done=[])
+        return UpdateHabitsResult(
+            sha=None, marked=[], appended_done=[], skip_reason="no_daily_file"
+        )
 
     try:
         habit_labels = parse_habit_labels(file.text)
@@ -116,7 +125,7 @@ async def update_habits(
     # semantic change (checkboxes flipped OR a bullet appended).
     if _checkbox_lines(new_text) == _checkbox_lines(file.text) and not appended_done:
         logger.info("update_habits no-op — nothing to change for %s", day)
-        return UpdateHabitsResult(sha=None, marked=[], appended_done=[])
+        return UpdateHabitsResult(sha=None, marked=[], appended_done=[], skip_reason="no_op")
 
     marked = sorted(_checked_habit_labels(new_text) - _checked_habit_labels(file.text))
 

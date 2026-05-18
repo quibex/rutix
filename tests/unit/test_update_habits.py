@@ -99,6 +99,7 @@ async def test_skips_when_no_completions(fake_github, fake_todoist, fake_claude)
     assert result.sha is None
     assert result.marked == []
     assert result.appended_done == []
+    assert result.skip_reason == "no_completions"
     fake_github.write.assert_not_called()
     fake_claude.classify_completions.assert_not_called()
 
@@ -111,6 +112,7 @@ async def test_skips_when_daily_missing(fake_github, fake_todoist, fake_claude):
 
     assert result.sha is None
     assert result.marked == []
+    assert result.skip_reason == "no_daily_file"
     fake_github.write.assert_not_called()
 
 
@@ -127,6 +129,7 @@ async def test_skips_when_classifier_returns_nothing_already_checked(
 
     assert result.sha is None
     assert result.marked == []
+    assert result.skip_reason == "no_op"
     fake_github.write.assert_not_called()
 
 
