@@ -12,9 +12,9 @@ SAMPLE_TRACKER = """# Таблица настроения
 
 ## Май 2026
 
-| День | Настр. | Сон (ч) | Вес | Тревога | Раздр. | Сейзар | Гидр.К | Алк/Нарк | Заметки |
-|------|--------|---------|-----|---------|--------|--------|--------|----------|---------|
-| 13   |        |         |     |         |        |        |        |          |         |
+| День | Настр. | Сон (ч) | Вес | Тревога | Раздр. | Энергия | Сейзар | Гидр.К | Алк/Нарк | Заметки |
+|------|--------|---------|-----|---------|--------|---------|--------|--------|----------|---------|
+| 13   |        |         |     |         |        |         |        |        |          |         |
 """
 
 
@@ -51,6 +51,7 @@ async def test_flush_day_writes_row_and_marks_log(session, fake_github):
             mood=1,
             anxiety=0,
             irritability=0,
+            energy=1,
             sleep_hours=7.5,
         )
     )
@@ -97,10 +98,10 @@ async def test_flush_day_skips_if_no_mood_entry(session, fake_github):
 async def test_flush_day_no_op_if_content_unchanged(session, fake_github):
     """If the rendered row equals what's already in the file, skip the PUT."""
     # Pre-populate the markdown with the exact same row we're about to render
-    # (mood=1, sleep=7.0, anx=0, irr=0, seizar taken 25mg, gidr_kanon taken 12.5mg, notes=quiet)
-    rendered = "| 13 | +1 | 7 |  | 0 | 0 | ✓ 25 | ✓ 12.5 |  | quiet |"
+    # (mood=1, sleep=7.0, anx=0, irr=0, energy=+1, seizar taken 25mg, gidr_kanon taken 12.5mg, notes=quiet)
+    rendered = "| 13 | +1 | 7 |  | 0 | 0 | +1 | ✓ 25 | ✓ 12.5 |  | quiet |"
     pre_filled = SAMPLE_TRACKER.replace(
-        "| 13   |        |         |     |         |        |        |        |          |         |",
+        "| 13   |        |         |     |         |        |         |        |        |          |         |",
         rendered,
     )
     fake_github.read = AsyncMock(return_value=FileContent(text=pre_filled, sha="x"))
@@ -129,6 +130,7 @@ async def test_flush_day_no_op_if_content_unchanged(session, fake_github):
             mood=1,
             anxiety=0,
             irritability=0,
+            energy=1,
             sleep_hours=7.0,
             notes="quiet",
         )

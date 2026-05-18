@@ -30,6 +30,7 @@ class TrackStates(StatesGroup):
     mood = State()
     anxiety = State()
     irritability = State()
+    energy = State()
     sleep = State()
     meds = State()
     weight = State()
@@ -62,6 +63,19 @@ def _mood_keyboard() -> InlineKeyboardMarkup:
 
 def _0_to_3(prefix: str) -> InlineKeyboardMarkup:
     return _kb_grid([(str(i), f"{prefix}:{i}") for i in range(4)], cols=4)
+
+
+def _energy_keyboard() -> InlineKeyboardMarkup:
+    return _kb_grid(
+        [
+            ("-2", "energy:-2"),
+            ("-1", "energy:-1"),
+            ("0", "energy:0"),
+            ("+1", "energy:1"),
+            ("+2", "energy:2"),
+        ],
+        cols=5,
+    )
 
 
 def _sleep_keyboard() -> InlineKeyboardMarkup:
@@ -118,9 +132,21 @@ async def cb_anxiety(cb: CallbackQuery, state: FSMContext):
 async def cb_irritability(cb: CallbackQuery, state: FSMContext):
     value = int(cb.data.split(":", 1)[1])
     await state.update_data(irritability=value)
+    await state.set_state(TrackStates.energy)
+    await cb.message.edit_text(
+        f"Раздражительность: {value}.\n\nСколько было сил/энергии?",
+        reply_markup=_energy_keyboard(),
+    )
+    await cb.answer()
+
+
+@router.callback_query(TrackStates.energy, F.data.startswith("energy:"))
+async def cb_energy(cb: CallbackQuery, state: FSMContext):
+    value = int(cb.data.split(":", 1)[1])
+    await state.update_data(energy=value)
     await state.set_state(TrackStates.sleep)
     await cb.message.edit_text(
-        f"Раздражительность: {value}.\n\nСколько часов спали?",
+        f"Энергия: {value:+d}.\n\nСколько часов спали?",
         reply_markup=_sleep_keyboard(),
     )
     await cb.answer()
@@ -240,6 +266,7 @@ async def _save_and_finish(message: Message, state: FSMContext, session_factory)
             existing.mood = data.get("mood")
             existing.anxiety = data.get("anxiety")
             existing.irritability = data.get("irritability")
+            existing.energy = data.get("energy")
             existing.sleep_hours = data.get("sleep_hours")
             if "weight" in data:
                 existing.weight = data["weight"]
@@ -250,6 +277,7 @@ async def _save_and_finish(message: Message, state: FSMContext, session_factory)
                     mood=data.get("mood"),
                     anxiety=data.get("anxiety"),
                     irritability=data.get("irritability"),
+                    energy=data.get("energy"),
                     sleep_hours=data.get("sleep_hours"),
                     weight=data.get("weight"),
                 )
@@ -273,6 +301,7 @@ async def _save_and_finish(message: Message, state: FSMContext, session_factory)
         f"настроение {data.get('mood', '?'):+d}, "
         f"тревога {data.get('anxiety', '?')}, "
         f"раздр. {data.get('irritability', '?')}, "
+        f"энергия {data.get('energy', '?'):+d}, "
         f"сон {data.get('sleep_hours', '?')}ч"
     )
     if "weight" in data:

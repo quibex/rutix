@@ -46,9 +46,16 @@ async def cmd_today(
             mood_str = f"+{mood.mood}"
         else:
             mood_str = str(mood.mood)
+        if mood.energy is None:
+            energy_str = "—"
+        elif mood.energy > 0:
+            energy_str = f"+{mood.energy}"
+        else:
+            energy_str = str(mood.energy)
         lines.append(
             f"📊 Настроение {mood_str} · тревога {mood.anxiety} · "
-            f"раздр. {mood.irritability} · сон {mood.sleep_hours}ч"
+            f"раздр. {mood.irritability} · энергия {energy_str} · "
+            f"сон {mood.sleep_hours}ч"
         )
 
     if meals:
