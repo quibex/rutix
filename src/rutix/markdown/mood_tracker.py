@@ -1,7 +1,7 @@
 """Surgical edits to health/mood_tracker.md.
 
 Schema (matches the existing format in quibex/life:health/mood_tracker.md):
-| День | Настр. | Сон (ч) | Вес | Тревога | Раздр. | <med1> | ... | Алк/Нарк | Заметки |
+| День | Настр. | Сон (ч) | Вес | Тревога | Раздр. | Энергия | <med1> | ... | Алк/Нарк | Заметки |
 
 `Алк/Нарк` column is always rendered empty — kept for back-compat with existing rows.
 """
@@ -40,6 +40,7 @@ class DayRow:
     weight: float | None = None
     anxiety: int | None = None
     irritability: int | None = None
+    energy: int | None = None
     meds: list[MedColumn] = field(default_factory=list)
     notes: str = ""
 
@@ -53,6 +54,7 @@ def render_row(row: DayRow) -> str:
         _float_cell(row.weight),
         _int_cell(row.anxiety),
         _int_cell(row.irritability),
+        _signed(row.energy),
     ]
     cells.extend(_med_cell(m) for m in row.meds)
     cells.append("")  # Алк/Нарк always empty

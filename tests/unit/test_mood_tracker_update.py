@@ -7,11 +7,11 @@ SAMPLE = """# Таблица настроения
 
 ## Май 2026
 
-| День | Настр. | Сон (ч) | Вес | Тревога | Раздр. | Сейзар | Гидр.К | Алк/Нарк | Заметки |
-|------|--------|---------|-----|---------|--------|--------|--------|----------|---------|
-| 1    | +2     | 7       |     |         |        | ✓ 25   | ✓      |          |         |
-| 13   |        |         |     |         |        |        |        |          |         |
-| 14   |        |         |     |         |        |        |        |          |         |
+| День | Настр. | Сон (ч) | Вес | Тревога | Раздр. | Энергия | Сейзар | Гидр.К | Алк/Нарк | Заметки |
+|------|--------|---------|-----|---------|--------|---------|--------|--------|----------|---------|
+| 1    | +2     | 7       |     |         |        |         | ✓ 25   | ✓      |          |         |
+| 13   |        |         |     |         |        |         |        |        |          |         |
+| 14   |        |         |     |         |        |         |        |        |          |         |
 
 ## Апрель 2026
 
@@ -22,7 +22,7 @@ SAMPLE = """# Таблица настроения
 
 
 def test_update_existing_day_in_target_section():
-    new_row = "| 13 | +1 | 7.5 |  | 0 | 0 | ✓ 25 | ✓ 12.5 |  | test |"
+    new_row = "| 13 | +1 | 7.5 |  | 0 | 0 | +1 | ✓ 25 | ✓ 12.5 |  | test |"
     result = update_day_row(SAMPLE, 2026, 5, 13, new_row)
 
     assert "| 13 | +1 | 7.5" in result
@@ -33,7 +33,7 @@ def test_update_existing_day_in_target_section():
 
 def test_update_does_not_match_other_section():
     # May day 14 should be updated; April day 14 must stay as is
-    new_row = "| 14 | -1 | 6 |  |  |  |  |  |  | may |"
+    new_row = "| 14 | -1 | 6 |  |  |  |  |  |  |  | may |"
     result = update_day_row(SAMPLE, 2026, 5, 14, new_row)
 
     assert "| 14   | +1     |" in result  # April preserved
@@ -52,6 +52,6 @@ def test_update_missing_day_raises():
 
 def test_update_idempotent_when_same_content():
     # Replacing with the exact same row should produce identical text
-    new_row = "| 1    | +2     | 7       |     |         |        | ✓ 25   | ✓      |          |         |"
+    new_row = "| 1    | +2     | 7       |     |         |        |         | ✓ 25   | ✓      |          |         |"
     result = update_day_row(SAMPLE, 2026, 5, 1, new_row)
     assert result == SAMPLE

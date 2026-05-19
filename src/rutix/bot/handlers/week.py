@@ -77,9 +77,16 @@ async def cb_week_day(
             mood_str = f"+{mood.mood}"
         else:
             mood_str = str(mood.mood)
+        if mood.energy is None:
+            energy_str = "—"
+        elif mood.energy > 0:
+            energy_str = f"+{mood.energy}"
+        else:
+            energy_str = str(mood.energy)
         lines.append(
             f"📊 {mood_str} · трев {mood.anxiety}"
-            f" · разд {mood.irritability} · сон {mood.sleep_hours}ч"
+            f" · разд {mood.irritability} · энерг {energy_str}"
+            f" · сон {mood.sleep_hours}ч"
         )
 
     if meals:

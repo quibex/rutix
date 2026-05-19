@@ -53,6 +53,7 @@ async def flush_day(
         weight=mood.weight,
         anxiety=mood.anxiety,
         irritability=mood.irritability,
+        energy=mood.energy,
         notes=mood.notes or "",
         meds=[
             MedColumn(
