@@ -6,7 +6,6 @@ import pytest
 from rutix.integrations.github import FileContent
 from rutix.jobs.update_habits import update_habits
 
-
 DAILY = """# 13 мая
 
 ## Привычки

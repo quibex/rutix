@@ -8,7 +8,6 @@ from rutix.bot.handlers.eat import _slot_for_time, cb_ok, cmd_eat
 from rutix.integrations.github import FileContent
 from rutix.markdown.daily import MealItem
 
-
 MSK = ZoneInfo("Europe/Moscow")
 DAILY = """# x
 

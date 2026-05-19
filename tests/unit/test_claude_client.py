@@ -31,6 +31,7 @@ def claude(tmp_path, fake_anthropic, monkeypatch):
     prompts_dir.mkdir()
     (prompts_dir / "eat.md").write_text("EAT_SYSTEM\n", encoding="utf-8")
     (prompts_dir / "classify_habits.md").write_text("CLASSIFY_SYSTEM\n", encoding="utf-8")
+    (prompts_dir / "close_week.md").write_text("CLOSE_WEEK_SYSTEM\n", encoding="utf-8")
     return ClaudeClient(
         api_key="sk-ant-test",
         prompts_dir=prompts_dir,
@@ -282,4 +283,97 @@ async def test_classify_completions_raises_on_malformed_json(claude, fake_anthro
         await claude.classify_completions(
             habit_labels=["habit"],
             completions=["task"],
+        )
+
+
+# --- close_week ---
+
+
+def _week_close_payload(next_dates: list[str], **overrides) -> dict:
+    base = {
+        "habits_aggregate": {"🥤 Protein": 3, "📚 Anki": 1},
+        "totals": {"avg_kcal": 2100, "days_with_food_data": 5},
+        "trends": {"kcal": "↑", "habits_completion": "="},
+        "score": 7,
+        "what_worked": ["Anki стабилен"],
+        "what_failed": ["Йога 0/3"],
+        "focus_next_week": ["вернуть вечерний skincare"],
+        "next_week_daily": {iso: f"# {iso}\n" for iso in next_dates},
+        "user_message": "🗓 W19 закрыта (7/10)",
+    }
+    base.update(overrides)
+    return base
+
+
+async def test_close_week_parses_into_dataclass(claude, fake_anthropic):
+    next_dates = [f"2026-05-{d:02d}" for d in range(11, 18)]
+    payload = _week_close_payload(next_dates)
+    fake_anthropic.messages.create.return_value = MagicMock(
+        content=[_thinking_block("..."), _text_block(json.dumps(payload))]
+    )
+
+    result = await claude.close_week(
+        week_id="2026-W19",
+        dates=[f"2026-05-{d:02d}" for d in range(4, 11)],
+        next_week_dates=next_dates,
+        habits_md="HABITS",
+        goals_md="GOALS",
+        prev_weekly_md="PREV",
+        daily_files={f"2026-05-{d:02d}": "" for d in range(4, 11)},
+        todoist_completions={f"2026-05-{d:02d}": [] for d in range(4, 11)},
+    )
+
+    assert result.habits_aggregate == {"🥤 Protein": 3, "📚 Anki": 1}
+    assert result.avg_kcal == 2100
+    assert result.trend_kcal == "↑"
+    assert result.score == 7
+    assert result.what_worked == ["Anki стабилен"]
+    assert result.focus_next_week == ["вернуть вечерний skincare"]
+    assert result.user_message.startswith("🗓 W19")
+    assert set(result.next_week_daily.keys()) == set(next_dates)
+
+
+async def test_close_week_uses_schema_and_caches_system(claude, fake_anthropic):
+    next_dates = ["2026-05-11"]
+    fake_anthropic.messages.create.return_value = MagicMock(
+        content=[_text_block(json.dumps(_week_close_payload(next_dates)))]
+    )
+
+    await claude.close_week(
+        week_id="2026-W19",
+        dates=["2026-05-10"],
+        next_week_dates=next_dates,
+        habits_md="HABITS",
+        goals_md="GOALS",
+        prev_weekly_md="PREV",
+        daily_files={"2026-05-10": ""},
+        todoist_completions={"2026-05-10": []},
+    )
+
+    kwargs = fake_anthropic.messages.create.call_args.kwargs
+    assert kwargs["output_config"]["format"]["type"] == "json_schema"
+    assert "habits_aggregate" in kwargs["output_config"]["format"]["schema"]["properties"]
+    assert kwargs["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert "CLOSE_WEEK_SYSTEM" in kwargs["system"][0]["text"]
+
+
+async def test_close_week_raises_when_next_week_keys_mismatch(claude, fake_anthropic):
+    next_dates = [f"2026-05-{d:02d}" for d in range(11, 18)]
+    # Drop one date from the model's response — must raise
+    payload = _week_close_payload(next_dates)
+    del payload["next_week_daily"]["2026-05-13"]
+    fake_anthropic.messages.create.return_value = MagicMock(
+        content=[_text_block(json.dumps(payload))]
+    )
+
+    with pytest.raises(ValueError, match="keys mismatch"):
+        await claude.close_week(
+            week_id="2026-W19",
+            dates=[f"2026-05-{d:02d}" for d in range(4, 11)],
+            next_week_dates=next_dates,
+            habits_md="",
+            goals_md="",
+            prev_weekly_md="",
+            daily_files={},
+            todoist_completions={},
         )

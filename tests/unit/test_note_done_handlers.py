@@ -11,7 +11,6 @@ from rutix.bot.handlers.note_done import (
 )
 from rutix.integrations.github import FileContent
 
-
 DAILY = """# x
 
 ## Привычки
@@ -128,9 +127,7 @@ async def test_msg_await_text_writes_done(fake_message, fake_state, fake_setting
     fake_state.get_data = AsyncMock(return_value={"cmd": "done"})
     fake_message.text = "урок акм 3ч"
 
-    await msg_await_text(
-        fake_message, state=fake_state, settings=fake_settings, github=fake_github
-    )
+    await msg_await_text(fake_message, state=fake_state, settings=fake_settings, github=fake_github)
 
     fake_state.clear.assert_awaited()
     written = fake_github.write.call_args.args[1]
@@ -142,9 +139,7 @@ async def test_msg_await_text_writes_note(fake_message, fake_state, fake_setting
     fake_state.get_data = AsyncMock(return_value={"cmd": "note"})
     fake_message.text = "интересная мысль"
 
-    await msg_await_text(
-        fake_message, state=fake_state, settings=fake_settings, github=fake_github
-    )
+    await msg_await_text(fake_message, state=fake_state, settings=fake_settings, github=fake_github)
 
     fake_state.clear.assert_awaited()
     written = fake_github.write.call_args.args[1]
@@ -158,9 +153,7 @@ async def test_msg_await_text_empty_does_nothing(
     fake_state.get_data = AsyncMock(return_value={"cmd": "done"})
     fake_message.text = "   "
 
-    await msg_await_text(
-        fake_message, state=fake_state, settings=fake_settings, github=fake_github
-    )
+    await msg_await_text(fake_message, state=fake_state, settings=fake_settings, github=fake_github)
 
     fake_github.write.assert_not_called()
     fake_state.clear.assert_awaited()

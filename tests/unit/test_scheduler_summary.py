@@ -1,8 +1,8 @@
 from datetime import date
 
+from rutix.jobs.flush_week import FlushWeekResult
 from rutix.jobs.scheduler import build_3am_summary
 from rutix.jobs.update_habits import UpdateHabitsResult
-
 
 THURSDAY = date(2026, 5, 14)
 WEDNESDAY = date(2026, 5, 13)
@@ -90,9 +90,11 @@ def test_summary_monday_includes_week_id_when_flushed():
         target=SUNDAY,
         flush_day_outcome="abc1234567",
         update_habits_outcome=UpdateHabitsResult(sha=None, marked=[]),
-        flush_week_outcome="def9876543",
+        flush_week_outcome=FlushWeekResult(sha="def9876543", user_message=""),
     )
-    assert "✅ flush_week 2026-W20: weekly+nutrition записаны (def9876)" in summary
+    assert (
+        "✅ flush_week 2026-W20: weekly+nutrition+thoughts+next-week записаны (def9876)" in summary
+    )
 
 
 def test_summary_monday_flush_week_already_done():

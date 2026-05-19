@@ -3,7 +3,6 @@ from pydantic import ValidationError
 
 from rutix.settings import Settings
 
-
 REQUIRED_VARS = [
     "BOT_TOKEN",
     "TELEGRAM_USER_ID",

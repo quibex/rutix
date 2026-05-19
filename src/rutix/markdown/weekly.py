@@ -1,8 +1,9 @@
-"""Generate weekly/2026-Wxx.md — metrics-filled, editorial-templated.
+"""Generate weekly/2026-Wxx.md.
 
-Bot fills hard numbers (Метрики table, Аналитика). Editorial sections
-(Фокус, Что получилось, Что не получилось, Прогресс, Инсайты, Оценка)
-are left as empty templates for the user to fill in Obsidian / via Claude.ai.
+Metric numbers and editorial sections are filled from the close_week Claude
+call (semantic habit matching, score, what worked / failed, focus). When no
+editorial data is passed in, sections are left as empty templates for manual
+fill — keeps the function usable from tests and for the deterministic path.
 """
 
 from dataclasses import dataclass, field
@@ -71,23 +72,66 @@ def _avg_kcal(days: list[WeeklyDay]) -> int | None:
     return round(sum(vals) / len(vals))
 
 
-def render_weekly(year: int, week_num: int, days: list[WeeklyDay], habits: HabitsConfig) -> str:
+def _bullet_section(items: list[str] | None) -> str:
+    if not items:
+        return "-"
+    return "\n".join(f"- {it}" for it in items)
+
+
+def _focus_section(items: list[str] | None) -> str:
+    if not items:
+        return "1."
+    return "\n".join(f"{i + 1}. {it}" for i, it in enumerate(items))
+
+
+def render_weekly(
+    year: int,
+    week_num: int,
+    days: list[WeeklyDay],
+    habits: HabitsConfig,
+    *,
+    habits_count: dict[str, int] | None = None,
+    avg_kcal_override: int | None = None,
+    score: int | None = None,
+    what_worked: list[str] | None = None,
+    what_failed: list[str] | None = None,
+    focus_next_week: list[str] | None = None,
+    trend_kcal: str | None = None,
+) -> str:
+    """Render weekly markdown.
+
+    Counts come from `habits_count` (semantic, from Claude) if provided,
+    else fall back to byte-equal counting via WeeklyDay.done_habits.
+    Editorial sections are filled from the keyword args when present.
+    """
     if days:
         date_range = russian_date_range(days[0].date, days[-1].date)
         title = f"# Неделя {week_num} ({date_range})"
     else:
         title = f"# Неделя {week_num}"
 
+    def _count(label: str) -> int:
+        if habits_count is not None:
+            return int(habits_count.get(label, 0))
+        return _count_habit(days, label)
+
     metric_rows = []
     for h in habits.daily:
-        count = _count_habit(days, h)
-        metric_rows.append(f"| {h} | 7 | {count} |")
+        metric_rows.append(f"| {h} | 7 | {_count(h)} |")
     for h, weekdays in habits.scheduled.items():
-        count = _count_habit(days, h)
-        metric_rows.append(f"| {h} | {len(weekdays)} | {count} |")
+        metric_rows.append(f"| {h} | {len(weekdays)} | {_count(h)} |")
 
-    avg_kcal = _avg_kcal(days)
-    avg_kcal_str = str(avg_kcal) if avg_kcal is not None else "н/д"
+    if avg_kcal_override is not None:
+        avg_kcal_str = str(avg_kcal_override)
+    else:
+        avg_kcal = _avg_kcal(days)
+        avg_kcal_str = str(avg_kcal) if avg_kcal is not None else "н/д"
+
+    kcal_cell = f"**{avg_kcal_str}**"
+    if trend_kcal in ("↑", "↓", "="):
+        kcal_cell = f"**{avg_kcal_str}** {trend_kcal}"
+
+    score_line = f"## Оценка недели: {score}/10" if score is not None else "## Оценка недели: /10"
 
     return f"""{title}
 
@@ -109,11 +153,11 @@ def render_weekly(year: int, week_num: int, days: list[WeeklyDay], habits: Habit
 
 ## ✅ Что получилось хорошо?
 
--
+{_bullet_section(what_worked)}
 
 ## ❌ Что не получилось? Почему?
 
--
+{_bullet_section(what_failed)}
 
 ## 📈 Прогресс
 
@@ -125,7 +169,13 @@ def render_weekly(year: int, week_num: int, days: list[WeeklyDay], habits: Habit
 
 ---
 
-## Оценка недели: /10
+{score_line}
+
+---
+
+## ➡️ Фокус на следующую неделю
+
+{_focus_section(focus_next_week)}
 
 ---
 
@@ -135,5 +185,5 @@ def render_weekly(year: int, week_num: int, days: list[WeeklyDay], habits: Habit
 
 | Метрика | Факт |
 |---------|------|
-| Ср. ккал/день | **{avg_kcal_str}** |
+| Ср. ккал/день | {kcal_cell} |
 """

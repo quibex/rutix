@@ -1,6 +1,5 @@
-from datetime import date, datetime
+from datetime import date
 from unittest.mock import AsyncMock, MagicMock
-from zoneinfo import ZoneInfo
 
 import pytest
 from freezegun import freeze_time

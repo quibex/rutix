@@ -16,6 +16,7 @@ tokens for repeated /eat calls within the cache window.
 import json
 import logging
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from anthropic import AsyncAnthropic
@@ -59,6 +60,83 @@ EAT_SCHEMA = {
     "required": ["items"],
     "additionalProperties": False,
 }
+
+
+WEEK_CLOSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "habits_aggregate": {
+            "type": "object",
+            "description": (
+                "Map of habit label (exact string from habits.md) → count of days "
+                "the habit was completed this week."
+            ),
+            "additionalProperties": {"type": "integer"},
+        },
+        "totals": {
+            "type": "object",
+            "properties": {
+                "avg_kcal": {"type": ["integer", "null"]},
+                "days_with_food_data": {"type": "integer"},
+            },
+            "required": ["avg_kcal", "days_with_food_data"],
+            "additionalProperties": False,
+        },
+        "trends": {
+            "type": "object",
+            "properties": {
+                "kcal": {"type": ["string", "null"], "enum": ["↑", "↓", "=", None]},
+                "habits_completion": {
+                    "type": ["string", "null"],
+                    "enum": ["↑", "↓", "=", None],
+                },
+            },
+            "required": ["kcal", "habits_completion"],
+            "additionalProperties": False,
+        },
+        "score": {"type": "integer", "minimum": 1, "maximum": 10},
+        "what_worked": {"type": "array", "items": {"type": "string"}},
+        "what_failed": {"type": "array", "items": {"type": "string"}},
+        "focus_next_week": {"type": "array", "items": {"type": "string"}},
+        "next_week_daily": {
+            "type": "object",
+            "description": (
+                "Map of YYYY-MM-DD → full markdown content for new daily file. "
+                "Keys must be exactly the 7 dates passed in next_week_dates."
+            ),
+            "additionalProperties": {"type": "string"},
+        },
+        "user_message": {"type": "string"},
+    },
+    "required": [
+        "habits_aggregate",
+        "totals",
+        "trends",
+        "score",
+        "what_worked",
+        "what_failed",
+        "focus_next_week",
+        "next_week_daily",
+        "user_message",
+    ],
+    "additionalProperties": False,
+}
+
+
+@dataclass
+class WeekClose:
+    habits_aggregate: dict[str, int]
+    avg_kcal: int | None
+    days_with_food_data: int
+    trend_kcal: str | None
+    trend_habits: str | None
+    score: int
+    what_worked: list[str]
+    what_failed: list[str]
+    focus_next_week: list[str]
+    next_week_daily: dict[str, str]
+    user_message: str
+    raw: dict = field(default_factory=dict)
 
 
 CLASSIFY_HABITS_SCHEMA = {
@@ -262,3 +340,93 @@ class ClaudeClient:
         matched = {h for h in payload.get("matched_habits", []) if h in habit_set}
         unmatched = [str(c) for c in payload.get("unmatched_completions", [])]
         return matched, unmatched
+
+    async def close_week(
+        self,
+        week_id: str,
+        dates: list[str],
+        next_week_dates: list[str],
+        habits_md: str,
+        goals_md: str,
+        prev_weekly_md: str,
+        daily_files: dict[str, str],
+        todoist_completions: dict[str, list[str]],
+    ) -> WeekClose:
+        """Run end-of-week closure through Claude.
+
+        Returns a WeekClose dataclass with semantically-matched habit aggregates,
+        editorial sections, 7 daily-file templates for the next week, and a
+        short Telegram message for the user.
+        """
+        prompt = (self.prompts_dir / "close_week.md").read_text(encoding="utf-8")
+
+        user_payload = json.dumps(
+            {
+                "week_id": week_id,
+                "dates": dates,
+                "next_week_dates": next_week_dates,
+                "habits_md": habits_md,
+                "goals_md": goals_md,
+                "prev_weekly_md": prev_weekly_md,
+                "daily_files": daily_files,
+                "todoist_completions": todoist_completions,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+
+        response = await self._sdk.messages.create(
+            model=self.model,
+            max_tokens=DEFAULT_MAX_TOKENS,
+            thinking={"type": "adaptive"},
+            output_config={
+                "effort": "high",
+                "format": {"type": "json_schema", "schema": WEEK_CLOSE_SCHEMA},
+            },
+            system=[
+                {
+                    "type": "text",
+                    "text": prompt,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            messages=[{"role": "user", "content": user_payload}],
+        )
+
+        text_blocks = [b.text for b in response.content if b.type == "text"]
+        raw = _strip_markdown_fences("\n".join(text_blocks).strip())
+        if not raw:
+            raise ValueError("Claude close_week returned empty text")
+
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as e:
+            logger.error("Claude close_week invalid JSON: %r", raw[:1000])
+            raise ValueError(f"Claude close_week не-JSON: {e}") from e
+
+        # Validate keys of next_week_daily — must match exactly the requested dates.
+        # If the model hallucinated or skipped a date, fail loudly: better to
+        # let the cron error and retry than write a partially correct week.
+        next_keys = set(payload["next_week_daily"].keys())
+        expected_keys = set(next_week_dates)
+        if next_keys != expected_keys:
+            missing = expected_keys - next_keys
+            extra = next_keys - expected_keys
+            raise ValueError(
+                f"close_week next_week_daily keys mismatch: missing={missing}, extra={extra}"
+            )
+
+        return WeekClose(
+            habits_aggregate={str(k): int(v) for k, v in payload["habits_aggregate"].items()},
+            avg_kcal=payload["totals"]["avg_kcal"],
+            days_with_food_data=int(payload["totals"]["days_with_food_data"]),
+            trend_kcal=payload["trends"]["kcal"],
+            trend_habits=payload["trends"]["habits_completion"],
+            score=int(payload["score"]),
+            what_worked=[str(s) for s in payload["what_worked"]],
+            what_failed=[str(s) for s in payload["what_failed"]],
+            focus_next_week=[str(s) for s in payload["focus_next_week"]],
+            next_week_daily={str(k): str(v) for k, v in payload["next_week_daily"].items()},
+            user_message=str(payload["user_message"]),
+            raw=payload,
+        )

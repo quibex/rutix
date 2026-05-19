@@ -95,6 +95,36 @@ def append_done(md: str, text: str) -> str:
     return _replace_section_body(md, "Что сделано", _append_bullet(body, text))
 
 
+_BULLET_RE = re.compile(r"^\s*-\s+(.+?)\s*$")
+
+
+def _parse_bullets(md: str, section: str) -> list[str]:
+    """Return non-empty bullet texts from a section. Empty placeholder
+    `-` lines and lines containing only `- ` are skipped. Missing section → []."""
+    try:
+        body = _section_body(md, section)
+    except ValueError:
+        return []
+    bullets: list[str] = []
+    for line in body.splitlines():
+        if not line.strip() or line.strip() == "-":
+            continue
+        m = _BULLET_RE.match(line)
+        if m:
+            bullets.append(m.group(1).strip())
+    return bullets
+
+
+def parse_notes(md: str) -> list[str]:
+    """Return non-empty bullets from the ## Заметки section."""
+    return _parse_bullets(md, "Заметки")
+
+
+def parse_done(md: str) -> list[str]:
+    """Return non-empty bullets from the ## Что сделано section."""
+    return _parse_bullets(md, "Что сделано")
+
+
 # --- Habits -----------------------------------------------------------------
 
 _HABIT_LINE_RE = re.compile(r"^(\s*-\s*\[)([ x])(\]\s*)(.+?)\s*$")

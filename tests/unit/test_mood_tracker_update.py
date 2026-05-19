@@ -2,7 +2,6 @@ import pytest
 
 from rutix.markdown.mood_tracker import update_day_row
 
-
 SAMPLE = """# Таблица настроения
 
 ## Май 2026

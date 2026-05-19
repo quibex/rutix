@@ -7,7 +7,6 @@ from rutix.db.models import FlushLog, MedActive, MedicationLog, MoodEntry
 from rutix.integrations.github import FileContent
 from rutix.jobs.flush_day import MOOD_TRACKER_PATH, flush_day
 
-
 SAMPLE_TRACKER = """# Таблица настроения
 
 ## Май 2026

@@ -1,13 +1,9 @@
-from datetime import date, datetime
+from datetime import date
 from unittest.mock import AsyncMock, MagicMock
-from zoneinfo import ZoneInfo
 
 import pytest
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.storage.memory import MemoryStorage
-from freezegun import freeze_time
 
-from rutix.bot.handlers.meds import cmd_meds, MedsStates
+from rutix.bot.handlers.meds import cmd_meds
 from rutix.db.models import MedActive
 
 

@@ -5,11 +5,12 @@ from rutix.markdown.daily import (
     append_done,
     append_meal,
     append_note,
+    parse_done,
     parse_habit_labels,
     parse_meals,
+    parse_notes,
     update_habits_checked,
 )
-
 
 SAMPLE = """# Четверг, 14 мая
 
@@ -203,3 +204,28 @@ def test_parse_meals_empty_returns_empty_list():
 def test_append_meal_raises_if_no_food_section():
     with pytest.raises(ValueError, match="Питание section not found"):
         append_meal("# header only\n\n## Заметки\n", MealItem("Обед", "x", 1, 1, 1, 1))
+
+
+# --- parse_notes / parse_done ---
+
+
+def test_parse_notes_returns_non_empty_bullets():
+    assert parse_notes(SAMPLE) == ["existing note line"]
+
+
+def test_parse_done_returns_non_empty_bullets():
+    assert parse_done(SAMPLE) == ["existing done line"]
+
+
+def test_parse_notes_skips_placeholder_dash():
+    md = "# x\n\n## Заметки\n\n-\n"
+    assert parse_notes(md) == []
+
+
+def test_parse_notes_returns_empty_when_section_missing():
+    assert parse_notes("# x\n\n## Питание\n") == []
+
+
+def test_parse_notes_preserves_order_and_multiple_bullets():
+    md = "# x\n\n## Заметки\n\n- первая мысль\n- вторая мысль\n- третья\n"
+    assert parse_notes(md) == ["первая мысль", "вторая мысль", "третья"]

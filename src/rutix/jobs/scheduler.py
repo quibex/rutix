@@ -18,7 +18,7 @@ from rutix.integrations.claude import ClaudeClient
 from rutix.integrations.github import GitHubClient
 from rutix.integrations.todoist import TodoistClient
 from rutix.jobs.flush_day import flush_day
-from rutix.jobs.flush_week import flush_week
+from rutix.jobs.flush_week import FlushWeekResult, flush_week
 from rutix.jobs.update_habits import UpdateHabitsResult, update_habits
 from rutix.time_utils import subjective_today, week_id, yesterday_of
 
@@ -85,14 +85,18 @@ def _fmt_update_habits_lines(
     return lines
 
 
-def _fmt_flush_week_line(today_is_monday: bool, wid: str, result: "str | Exception | None") -> str:
+def _fmt_flush_week_line(
+    today_is_monday: bool, wid: str, result: "FlushWeekResult | Exception | None"
+) -> str:
     if not today_is_monday:
         return "⏭ flush_week: не понедельник, пропущено"
     if isinstance(result, Exception):
         return f"⚠️ flush_week {wid}: ошибка — {type(result).__name__}: {result}"
     if result is None:
         return f"⏭ flush_week {wid}: уже записано"
-    return f"✅ flush_week {wid}: weekly+nutrition записаны{_fmt_sha(result)}"
+    return (
+        f"✅ flush_week {wid}: weekly+nutrition+thoughts+next-week записаны{_fmt_sha(result.sha)}"
+    )
 
 
 def build_3am_summary(
@@ -100,7 +104,7 @@ def build_3am_summary(
     target: date,
     flush_day_outcome: "str | Exception | None",
     update_habits_outcome: "UpdateHabitsResult | Exception",
-    flush_week_outcome: "str | Exception | None",
+    flush_week_outcome: "FlushWeekResult | Exception | None",
 ) -> str:
     lines = [f"🌅 3am job: {today.isoformat()}"]
     lines.append(_fmt_flush_day_line(target.isoformat(), flush_day_outcome))
@@ -151,7 +155,7 @@ def make_scheduler(
 
         flush_day_outcome: str | Exception | None
         update_habits_outcome: UpdateHabitsResult | Exception
-        flush_week_outcome: str | Exception | None
+        flush_week_outcome: FlushWeekResult | Exception | None
 
         async with session_factory() as session:
             try:
@@ -170,7 +174,7 @@ def make_scheduler(
 
         async with session_factory() as session:
             try:
-                flush_week_outcome = await flush_week(session, github, today)
+                flush_week_outcome = await flush_week(session, github, today, claude, todoist)
                 logger.info("flush_week result: %s", flush_week_outcome)
             except Exception as e:
                 logger.exception("flush_week failed")
@@ -187,6 +191,16 @@ def make_scheduler(
             await bot.send_message(chat_id=telegram_user_id, text=summary)
         except Exception:
             logger.exception("failed to send 3am summary")
+
+        # Standalone weekly recap from Claude — sent as a separate message
+        # so it isn't lost in the technical 3am summary.
+        if isinstance(flush_week_outcome, FlushWeekResult) and flush_week_outcome.user_message:
+            try:
+                await bot.send_message(
+                    chat_id=telegram_user_id, text=flush_week_outcome.user_message
+                )
+            except Exception:
+                logger.exception("failed to send weekly recap message")
 
     async def evening_ping():
         try:
