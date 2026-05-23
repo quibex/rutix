@@ -1,6 +1,11 @@
 """APScheduler — recurring jobs:
 
 - daily_3am (03:00): flush_day(yesterday) + update_habits(yesterday) + flush_week(today)
+- update_habits_retry (06:00, 08:00): re-run update_habits(yesterday) if 03:00 lost
+  it to a transient Todoist outage. Idempotent — silent unless it actually changes
+  something or the 08:00 final attempt still errors.
+- med_reminder_tick (every minute): per-pill reminder — fires for meds whose
+  `reminder_time` matches the current minute. Silent unless something is due.
 - evening_ping (21:00): nudge user to /track if they haven't yet
 """
 
@@ -19,6 +24,7 @@ from rutix.integrations.github import GitHubClient
 from rutix.integrations.todoist import TodoistClient
 from rutix.jobs.flush_day import flush_day
 from rutix.jobs.flush_week import FlushWeekResult, flush_week
+from rutix.jobs.med_reminder import med_reminder_tick
 from rutix.jobs.update_habits import UpdateHabitsResult, update_habits
 from rutix.time_utils import subjective_today, week_id, yesterday_of
 
@@ -97,6 +103,46 @@ def _fmt_flush_week_line(
     return (
         f"✅ flush_week {wid}: weekly+nutrition+thoughts+next-week записаны{_fmt_sha(result.sha)}"
     )
+
+
+def build_retry_summary(
+    target: date,
+    result: "UpdateHabitsResult | Exception",
+    is_final_attempt: bool,
+) -> str | None:
+    """Build a Telegram message for an update_habits catch-up run.
+
+    Returns None when the retry should stay silent (no_op, no_completions,
+    or non-final exception). Returns a formatted message otherwise.
+    """
+    target_iso = target.isoformat()
+    if isinstance(result, Exception):
+        if not is_final_attempt:
+            return None
+        return (
+            f"⚠️ update_habits за {target_iso}: финальная попытка тоже упала — "
+            f"{type(result).__name__}: {result}"
+        )
+    if result.sha is None:
+        # skip_reason in {no_completions, no_daily_file, no_op} — nothing to report;
+        # the 03:00 summary already informed the user about the original outcome.
+        return None
+    n = len(result.marked)
+    m = len(result.appended_done)
+    head = f"🔁 update_habits за {target_iso} (catch-up): отметил {n} {_habit_word(n)}"
+    if m:
+        head += f" + {m} в Что сделано"
+    head += _fmt_sha(result.sha)
+    lines = [head]
+    for label in result.marked[:_MAX_MARKED_IN_MESSAGE]:
+        lines.append(f"   • {label}")
+    if len(result.marked) > _MAX_MARKED_IN_MESSAGE:
+        lines.append(f"   … и ещё {len(result.marked) - _MAX_MARKED_IN_MESSAGE}")
+    for title in result.appended_done[:_MAX_MARKED_IN_MESSAGE]:
+        lines.append(f"   ↳ {title}")
+    if len(result.appended_done) > _MAX_MARKED_IN_MESSAGE:
+        lines.append(f"   ↳ … и ещё {len(result.appended_done) - _MAX_MARKED_IN_MESSAGE}")
+    return "\n".join(lines)
 
 
 def build_3am_summary(
@@ -202,6 +248,34 @@ def make_scheduler(
             except Exception:
                 logger.exception("failed to send weekly recap message")
 
+    async def update_habits_retry(is_final_attempt: bool):
+        today = subjective_today(datetime.now(ZoneInfo(tz)), tz)
+        target = yesterday_of(today)
+        logger.info(
+            "update_habits_retry running for target=%s (final=%s)", target, is_final_attempt
+        )
+        result: UpdateHabitsResult | Exception
+        try:
+            result = await update_habits(github, todoist, claude, target)
+            logger.info("update_habits_retry result: %s", result)
+        except Exception as e:
+            logger.exception("update_habits_retry failed")
+            result = e
+
+        msg = build_retry_summary(target=target, result=result, is_final_attempt=is_final_attempt)
+        if msg is None:
+            return
+        try:
+            await bot.send_message(chat_id=telegram_user_id, text=msg)
+        except Exception:
+            logger.exception("failed to send update_habits_retry message")
+
+    async def med_reminder():
+        try:
+            await med_reminder_tick(session_factory, bot, telegram_user_id, tz)
+        except Exception:
+            logger.exception("med_reminder_tick failed")
+
     async def evening_ping():
         try:
             await send_evening_ping_if_needed(session_factory, bot, telegram_user_id, tz)
@@ -212,6 +286,26 @@ def make_scheduler(
         daily_3am,
         trigger=CronTrigger(hour=3, minute=0, timezone=ZoneInfo(tz)),
         id="daily_3am",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        update_habits_retry,
+        trigger=CronTrigger(hour=6, minute=0, timezone=ZoneInfo(tz)),
+        kwargs={"is_final_attempt": False},
+        id="update_habits_retry_06",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        update_habits_retry,
+        trigger=CronTrigger(hour=8, minute=0, timezone=ZoneInfo(tz)),
+        kwargs={"is_final_attempt": True},
+        id="update_habits_retry_08",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        med_reminder,
+        trigger=CronTrigger(minute="*", timezone=ZoneInfo(tz)),
+        id="med_reminder_tick",
         replace_existing=True,
     )
     scheduler.add_job(

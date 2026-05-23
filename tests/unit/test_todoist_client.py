@@ -9,7 +9,8 @@ from rutix.integrations.todoist import TodoistClient
 
 @pytest.fixture
 def client():
-    return TodoistClient(token="tod_test", tz="Europe/Moscow")
+    # retry_backoff_base=0 so retry tests don't actually sleep
+    return TodoistClient(token="tod_test", tz="Europe/Moscow", retry_backoff_base=0)
 
 
 def _ev(content: str, event_date: str, event_type: str = "completed") -> dict:
@@ -135,10 +136,93 @@ async def test_completed_titles_returns_empty_set_on_403(client):
 
 
 @respx.mock
-async def test_completed_titles_raises_on_5xx(client):
-    respx.get("https://api.todoist.com/api/v1/activities").mock(return_value=httpx.Response(500))
+async def test_completed_titles_raises_on_5xx_after_exhausting_retries(client):
+    """All retry attempts return 5xx → eventually raise so the cron sees the failure."""
+    route = respx.get("https://api.todoist.com/api/v1/activities").mock(
+        return_value=httpx.Response(503)
+    )
     with pytest.raises(httpx.HTTPStatusError):
         await client.completed_titles_for_day(date(2026, 5, 14))
+    # default 3 attempts (initial + 2 retries)
+    assert route.call_count == 3
+    await client.aclose()
+
+
+@respx.mock
+async def test_5xx_then_200_succeeds_via_retry(client):
+    """Transient 5xx → retry → 200 should succeed without raising."""
+    route = respx.get("https://api.todoist.com/api/v1/activities").mock(
+        side_effect=[
+            httpx.Response(503),
+            httpx.Response(502),
+            httpx.Response(
+                200,
+                json={
+                    "results": [_ev("📚 Anki", "2026-05-14T10:00:00Z")],
+                    "next_cursor": None,
+                },
+            ),
+        ]
+    )
+    titles = await client.completed_titles_for_day(date(2026, 5, 14))
+    assert titles == {"📚 Anki"}
+    assert route.call_count == 3
+    await client.aclose()
+
+
+@respx.mock
+async def test_5xx_retry_resets_after_successful_page(client):
+    """Retry budget is per-request, not per-call — second page failure should
+    also get its own retries."""
+    route = respx.get("https://api.todoist.com/api/v1/activities").mock(
+        side_effect=[
+            # page 1 succeeds with cursor
+            httpx.Response(
+                200,
+                json={
+                    "results": [_ev("📚 Anki", "2026-05-14T10:00:00Z")],
+                    "next_cursor": "page2",
+                },
+            ),
+            # page 2 fails twice then succeeds
+            httpx.Response(503),
+            httpx.Response(503),
+            httpx.Response(
+                200,
+                json={
+                    "results": [_ev("🌅 Skincare AM", "2026-05-14T07:00:00Z")],
+                    "next_cursor": None,
+                },
+            ),
+        ]
+    )
+    titles = await client.completed_titles_for_day(date(2026, 5, 14))
+    assert titles == {"📚 Anki", "🌅 Skincare AM"}
+    assert route.call_count == 4
+    await client.aclose()
+
+
+@respx.mock
+async def test_4xx_not_retried(client):
+    """4xx other than 403 should not be retried — it's a client bug, not transient."""
+    route = respx.get("https://api.todoist.com/api/v1/activities").mock(
+        return_value=httpx.Response(401)
+    )
+    with pytest.raises(httpx.HTTPStatusError):
+        await client.completed_titles_for_day(date(2026, 5, 14))
+    assert route.call_count == 1
+    await client.aclose()
+
+
+@respx.mock
+async def test_403_not_retried(client):
+    """403 = Pro required, retrying won't help; should short-circuit on first call."""
+    route = respx.get("https://api.todoist.com/api/v1/activities").mock(
+        return_value=httpx.Response(403, json={"error": "Pro required"})
+    )
+    titles = await client.completed_titles_for_day(date(2026, 5, 14))
+    assert titles == set()
+    assert route.call_count == 1
     await client.aclose()
 
 
