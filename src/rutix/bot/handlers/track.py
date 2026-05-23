@@ -243,7 +243,7 @@ async def msg_weight(
         await message.answer("⚠️ Это не число. Попробуйте ещё раз или нажмите «Пропустить».")
         return
     await state.update_data(weight=weight)
-    await _save_and_finish(message, state, session_factory)
+    await _save_and_finish(message, state, session_factory, use_answer=True)
 
 
 @router.callback_query(TrackStates.weight, F.data == "weight:skip")
@@ -256,7 +256,13 @@ async def cb_weight_skip(
     await cb.answer()
 
 
-async def _save_and_finish(message: Message, state: FSMContext, session_factory):
+async def _save_and_finish(
+    message: Message,
+    state: FSMContext,
+    session_factory,
+    *,
+    use_answer: bool = False,
+):
     data = await state.get_data()
     day = date.fromisoformat(data["day"])
 
@@ -306,6 +312,9 @@ async def _save_and_finish(message: Message, state: FSMContext, session_factory)
     )
     if "weight" in data:
         summary += f", вес {data['weight']}кг"
-    await message.edit_text(summary)
+    if use_answer:
+        await message.answer(summary)
+    else:
+        await message.edit_text(summary)
     await state.clear()
     logger.info("track saved for %s by handler", day)
