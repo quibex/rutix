@@ -52,6 +52,9 @@ class MedActive(Base):
     current_dose: Mapped[str] = mapped_column(String, nullable=False)
     started_at: Mapped[date] = mapped_column(Date, nullable=False)
     archived_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # "HH:MM" local time; NULL = no reminder. The med_reminder_tick cron polls
+    # every minute and fires for meds whose reminder_time matches now.
+    reminder_time: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class FlushLog(Base):

@@ -1,7 +1,7 @@
 from datetime import date
 
 from rutix.jobs.flush_week import FlushWeekResult
-from rutix.jobs.scheduler import build_3am_summary
+from rutix.jobs.scheduler import build_3am_summary, build_retry_summary
 from rutix.jobs.update_habits import UpdateHabitsResult
 
 THURSDAY = date(2026, 5, 14)
@@ -144,3 +144,86 @@ def test_summary_habit_pluralization_five():
         flush_week_outcome=None,
     )
     assert "отметил 5 привычек" in summary
+
+
+# build_retry_summary — for the 06:00 / 08:00 catch-up cron
+
+
+def test_retry_summary_marked_habits_always_notifies():
+    """Recovery from a failed 3am run should always notify the user."""
+    msg = build_retry_summary(
+        target=WEDNESDAY,
+        result=UpdateHabitsResult(sha="abc1234", marked=["📚 Anki"]),
+        is_final_attempt=False,
+    )
+    assert msg is not None
+    assert "🔁" in msg  # retry icon
+    assert "2026-05-13" in msg
+    assert "отметил 1 привычку" in msg
+    assert "📚 Anki" in msg
+
+
+def test_retry_summary_appended_done_only_notifies():
+    """Even if no habits matched, new bullets in `## Что сделано` count as a change."""
+    msg = build_retry_summary(
+        target=WEDNESDAY,
+        result=UpdateHabitsResult(
+            sha="abc1234", marked=[], appended_done=["купить хлеб"]
+        ),
+        is_final_attempt=False,
+    )
+    assert msg is not None
+    assert "купить хлеб" in msg
+
+
+def test_retry_summary_no_op_silent_when_not_final():
+    """3am already succeeded → catch-up should not spam user with `no_op`."""
+    msg = build_retry_summary(
+        target=WEDNESDAY,
+        result=UpdateHabitsResult(sha=None, marked=[], skip_reason="no_op"),
+        is_final_attempt=False,
+    )
+    assert msg is None
+
+
+def test_retry_summary_no_completions_silent_when_not_final():
+    msg = build_retry_summary(
+        target=WEDNESDAY,
+        result=UpdateHabitsResult(sha=None, marked=[], skip_reason="no_completions"),
+        is_final_attempt=False,
+    )
+    assert msg is None
+
+
+def test_retry_summary_exception_silent_on_intermediate_attempt():
+    """Intermediate failures stay silent — we still have another attempt left."""
+    msg = build_retry_summary(
+        target=WEDNESDAY,
+        result=RuntimeError("503"),
+        is_final_attempt=False,
+    )
+    assert msg is None
+
+
+def test_retry_summary_exception_notifies_on_final_attempt():
+    """Final attempt failed — user must know habits weren't recovered."""
+    msg = build_retry_summary(
+        target=WEDNESDAY,
+        result=RuntimeError("Todoist still down"),
+        is_final_attempt=True,
+    )
+    assert msg is not None
+    assert "⚠️" in msg
+    assert "RuntimeError" in msg
+    assert "Todoist still down" in msg
+    assert "2026-05-13" in msg
+
+
+def test_retry_summary_no_op_silent_on_final_attempt():
+    """Even on the final attempt, no_op means 3am already covered it — stay quiet."""
+    msg = build_retry_summary(
+        target=WEDNESDAY,
+        result=UpdateHabitsResult(sha=None, marked=[], skip_reason="no_op"),
+        is_final_attempt=True,
+    )
+    assert msg is None
