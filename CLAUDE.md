@@ -35,6 +35,8 @@ alembic revision --autogenerate -m "msg"   # new migration after model change
 
 Every push to `main` runs `.github/workflows/prod.yml` → ci (ruff + pytest + alembic) → build & push to `ghcr.io/quibex/rutix:latest` → SSH deploy to VPS → health check. README §"Phase 3" has the VPS / secrets setup.
 
+Prod VPS is reachable as `ssh monitor` (alias in `~/.ssh/config` → `193.109.193.167`, user `root`, key `~/.ssh/id_ed25519_kurut`). Compose stack lives at `/opt/rutix/`. Quick live-log peek: `ssh monitor 'cd /opt/rutix && docker compose logs --tail=200 bot'`.
+
 ## Architecture
 
 ### Two-tier persistence — SQLite is a buffer, GitHub is the source of truth
