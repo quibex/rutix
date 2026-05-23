@@ -121,7 +121,7 @@ def build_reminder_keyboard(day: date, meds: list[MedActive]) -> InlineKeyboardM
     rows = [
         [
             InlineKeyboardButton(
-                text=f"✓ {m.name} ({m.current_dose} мг)",
+                text=f"💊 Выпил — {m.name}",
                 callback_data=f"{CB_PREFIX}:{day_iso}:{m.key}",
             )
         ]

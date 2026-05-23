@@ -162,6 +162,9 @@ async def cb_sleep(
     await state.update_data(sleep_hours=value)
     await state.set_state(TrackStates.meds)
 
+    data = await state.get_data()
+    day = date.fromisoformat(data["day"])
+
     async with session_factory() as session:
         meds = (
             await session.scalars(
@@ -170,9 +173,22 @@ async def cb_sleep(
                 .order_by(MedActive.started_at)
             )
         ).all()
-    await state.update_data(meds_pending=[m.key for m in meds], meds_taken=[])
+        already_taken_keys = set(
+            (
+                await session.scalars(
+                    select(MedicationLog.med_key).where(
+                        MedicationLog.day == day,
+                        MedicationLog.taken.is_(True),
+                    )
+                )
+            ).all()
+        )
 
-    if meds:
+    meds_taken = [{"key": m.key, "taken": True} for m in meds if m.key in already_taken_keys]
+    meds_pending = [m.key for m in meds if m.key not in already_taken_keys]
+    await state.update_data(meds_pending=meds_pending, meds_taken=meds_taken)
+
+    if meds_pending:
         await _ask_next_med(cb.message, state, session_factory)
     else:
         await _maybe_ask_weight_or_save(cb.message, state, session_factory)
