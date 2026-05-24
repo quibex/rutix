@@ -86,11 +86,18 @@ def _append_bullet(body: str, text: str) -> str:
 
 
 def append_note(md: str, text: str) -> str:
+    if text in parse_notes(md):
+        return md
     body = _section_body(md, "Заметки")
     return _replace_section_body(md, "Заметки", _append_bullet(body, text))
 
 
 def append_done(md: str, text: str) -> str:
+    # Idempotent: skip if the bullet is already present. update_habits is
+    # re-run by the 06:00/08:00 catch-up crons, and without this gate every
+    # retry would duplicate every bullet under `## Что сделано`.
+    if text in parse_done(md):
+        return md
     body = _section_body(md, "Что сделано")
     return _replace_section_body(md, "Что сделано", _append_bullet(body, text))
 

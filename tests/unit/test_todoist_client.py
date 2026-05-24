@@ -22,9 +22,10 @@ def _ev(content: str, event_date: str, event_type: str = "completed") -> dict:
 
 
 @respx.mock
-async def test_completed_titles_filters_by_local_date(client):
-    """Even if the API ignores date_from/date_to, the client filters event_date
-    in MSK to the target day."""
+async def test_completed_titles_filters_by_subjective_day(client):
+    """Filters event_date by the *subjective* day in self.tz — the 3am-boundary
+    window matching subjective_today() elsewhere in the bot. A habit ticked at
+    02:30 MSK on 2026-05-15 still belongs to subjective day 2026-05-14."""
     respx.get("https://api.todoist.com/api/v1/activities").mock(
         return_value=httpx.Response(
             200,
@@ -32,9 +33,9 @@ async def test_completed_titles_filters_by_local_date(client):
                 "results": [
                     # 2026-05-14 13:49 UTC = 16:49 MSK 2026-05-14 — IN
                     _ev("📚 Anki", "2026-05-14T13:49:39.050738Z"),
-                    # 2026-05-14 23:30 UTC = 02:30 MSK 2026-05-15 — OUT
+                    # 2026-05-14 23:30 UTC = 02:30 MSK 2026-05-15 — IN (subjective 2026-05-14)
                     _ev("🌅 Skincare AM", "2026-05-14T23:30:00.000000Z"),
-                    # 2026-05-13 22:00 UTC = 01:00 MSK 2026-05-14 — IN
+                    # 2026-05-13 22:00 UTC = 01:00 MSK 2026-05-14 — OUT (subjective 2026-05-13)
                     _ev("🌙 Skincare PM", "2026-05-13T22:00:00.000000Z"),
                     # dedupe — second Anki completion same day
                     _ev("📚 Anki", "2026-05-14T05:00:00.000000Z"),
@@ -47,14 +48,14 @@ async def test_completed_titles_filters_by_local_date(client):
     )
 
     titles = await client.completed_titles_for_day(date(2026, 5, 14))
-    assert titles == {"📚 Anki", "🌙 Skincare PM"}
+    assert titles == {"📚 Anki", "🌅 Skincare AM"}
     await client.aclose()
 
 
 @respx.mock
 async def test_request_sends_correct_query_params(client):
     """Uses object_event_types (the param /api/v1/activities actually honors)
-    + the day window in UTC for date_from/date_to + limit clamped to API max 100."""
+    + the *subjective* day window in UTC for date_from/date_to + limit at 100."""
     route = respx.get("https://api.todoist.com/api/v1/activities").mock(
         return_value=httpx.Response(200, json={"results": [], "next_cursor": None})
     )
@@ -62,10 +63,52 @@ async def test_request_sends_correct_query_params(client):
     params = dict(route.calls[0].request.url.params)
     assert params["object_event_types"] == '["item:completed"]'
     assert params["limit"] == "100"
-    # MSK is UTC+3 → day 2026-05-14 MSK = [2026-05-13T21:00Z, 2026-05-14T21:00Z)
-    assert params["date_from"] == "2026-05-13T21:00:00Z"
-    assert params["date_to"] == "2026-05-14T21:00:00Z"
+    # Subjective day 2026-05-14 in MSK = [03:00 MSK 2026-05-14, 03:00 MSK 2026-05-15)
+    # = [2026-05-14T00:00Z, 2026-05-15T00:00Z) (MSK is UTC+3)
+    assert params["date_from"] == "2026-05-14T00:00:00Z"
+    assert params["date_to"] == "2026-05-15T00:00:00Z"
     assert "cursor" not in params  # first page
+    await client.aclose()
+
+
+@respx.mock
+async def test_event_at_subjective_boundary_3am_belongs_to_new_day(client):
+    """A completion at exactly 03:00:00 MSK 2026-05-15 = subjective 2026-05-15,
+    NOT 2026-05-14 — the boundary is half-open."""
+    respx.get("https://api.todoist.com/api/v1/activities").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    # 2026-05-15 00:00 UTC = 03:00 MSK 2026-05-15 — subjective 2026-05-15
+                    _ev("📚 Anki", "2026-05-15T00:00:00.000000Z"),
+                ],
+                "next_cursor": None,
+            },
+        )
+    )
+    titles = await client.completed_titles_for_day(date(2026, 5, 14))
+    assert titles == set()
+    await client.aclose()
+
+
+@respx.mock
+async def test_event_just_before_3am_still_belongs_to_previous_subjective_day(client):
+    """02:59 MSK 2026-05-15 = subjective 2026-05-14 — the user hasn't slept yet."""
+    respx.get("https://api.todoist.com/api/v1/activities").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    # 2026-05-14 23:59 UTC = 02:59 MSK 2026-05-15
+                    _ev("📚 Anki", "2026-05-14T23:59:00.000000Z"),
+                ],
+                "next_cursor": None,
+            },
+        )
+    )
+    titles = await client.completed_titles_for_day(date(2026, 5, 14))
+    assert titles == {"📚 Anki"}
     await client.aclose()
 
 

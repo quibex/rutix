@@ -14,11 +14,13 @@ The endpoint `/api/v1/activities` filters via `object_event_types=["item:complet
 
 import asyncio
 import logging
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import httpx
+
+from rutix.time_utils import EARLY_MORNING_BOUNDARY, subjective_today
 
 logger = logging.getLogger(__name__)
 
@@ -73,16 +75,24 @@ class TodoistClient:
         raise last_exc
 
     async def completed_titles_for_day(self, day: date) -> set[str]:
-        """Return task titles completed on the given local date (in self.tz).
+        """Return task titles completed during the user's *subjective* day in
+        self.tz — the window [day 03:00 local, day+1 03:00 local), matching
+        the same 3am boundary used by `subjective_today` elsewhere in the bot.
+
+        Without this, a habit checked between 00:00 and 03:00 gets bucketed
+        into the next calendar day in Todoist's log and the 03:00 flush
+        misses it for the day it actually belongs to.
 
         Includes recurring tasks via Activity Log. Dedupes if a recurring
         task was completed twice on the same day.
         """
         target_tz = ZoneInfo(self.tz)
         utc = ZoneInfo("UTC")
-        day_start_utc = datetime.combine(day, time.min, tzinfo=target_tz).astimezone(utc)
-        day_end_utc = (
-            datetime.combine(day + timedelta(days=1), time.min, tzinfo=target_tz)
+        day_start_utc = datetime.combine(day, EARLY_MORNING_BOUNDARY, tzinfo=target_tz).astimezone(
+            utc
+        )
+        day_end_utc = datetime.combine(
+            day + timedelta(days=1), EARLY_MORNING_BOUNDARY, tzinfo=target_tz
         ).astimezone(utc)
 
         titles: set[str] = set()
@@ -127,7 +137,7 @@ class TodoistClient:
                     dt_utc = datetime.fromisoformat(event_date.replace("Z", "+00:00"))
                 except ValueError:
                     continue
-                if dt_utc.astimezone(target_tz).date() != day:
+                if subjective_today(dt_utc, self.tz) != day:
                     continue
                 events_in_window += 1
                 content = ev.get("extra_data", {}).get("content")

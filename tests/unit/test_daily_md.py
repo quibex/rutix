@@ -91,6 +91,25 @@ def test_append_done_adds_bullet_under_section():
     assert "- сделал X" in done_block
 
 
+def test_append_done_is_idempotent_for_existing_bullet():
+    """update_habits is retried by the 06:00/08:00 catch-up crons; without
+    dedup, each retry duplicates every bullet in `## Что сделано`."""
+    once = append_done(SAMPLE, "сделал X")
+    twice = append_done(once, "сделал X")
+    assert once == twice
+
+
+def test_append_done_is_idempotent_for_preexisting_bullet():
+    once = append_done(SAMPLE, "existing done line")
+    assert once == SAMPLE
+
+
+def test_append_note_is_idempotent_for_existing_bullet():
+    once = append_note(SAMPLE, "новая заметка")
+    twice = append_note(once, "новая заметка")
+    assert once == twice
+
+
 # --- update_habits_checked ---
 
 
