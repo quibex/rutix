@@ -433,6 +433,8 @@ async def cb_med_taken(
             log.taken = True
         await session.commit()
         remaining = await untaken_active_meds(session, day)
+        med_time = med.reminder_time
+        remaining = [m for m in remaining if m.reminder_time == med_time]
 
     if not remaining:
         await cb.message.edit_text(ALL_DONE_TEXT)

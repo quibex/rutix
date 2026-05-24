@@ -83,7 +83,7 @@ async def test_cmd_meds_lists_active(fake_message, fake_settings, session):
 # cb_med_taken — pressing the "✓ принял" button on a reminder
 
 
-async def _add_med(session, key, name="Сейзар", dose="25"):
+async def _add_med(session, key, name="Сейзар", dose="25", reminder_time=None):
     session.add(
         MedActive(
             key=key,
@@ -91,6 +91,7 @@ async def _add_med(session, key, name="Сейзар", dose="25"):
             column_label=name,
             current_dose=dose,
             started_at=date(2026, 5, 1),
+            reminder_time=reminder_time,
         )
     )
     await session.commit()
@@ -145,6 +146,19 @@ async def test_cb_med_taken_remaining_meds_keep_their_buttons(session):
     kb = kwargs["reply_markup"]
     btn = kb.inline_keyboard[0][0]
     assert btn.callback_data == f"{CB_PREFIX}:2026-05-23:atarax"
+
+
+async def test_cb_med_taken_different_reminder_times_dont_leak(session):
+    """Taking a morning med should NOT show the evening med as remaining."""
+    await _add_med(session, "seizar", "Сейзар", reminder_time="11:00")
+    await _add_med(session, "atarax", "Атаракс", reminder_time="23:00")
+
+    cb = _fake_callback(f"{CB_PREFIX}:2026-05-23:seizar")
+    await cb_med_taken(cb, session_factory=_session_factory_for(session))
+
+    args, kwargs = cb.message.edit_text.call_args
+    assert args[0] == ALL_DONE_TEXT
+    assert "reply_markup" not in kwargs
 
 
 async def test_cb_med_taken_uses_callback_day_not_today(session):
