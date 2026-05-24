@@ -1,12 +1,13 @@
 """Parse and edit sections of daily/*.md files.
 
-A daily file has these sections (top-to-bottom): Сон, Время (ч), Привычки,
-Питание (table), Что сделано, Заметки. We touch Питание / Привычки /
-Что сделано / Заметки. The rest stays as the user wrote it.
+A daily file has these sections (top-to-bottom): 🗓 План на день, Сон,
+Время (ч), Самочувствие, Привычки, Питание (table), Что сделано, Заметки.
+We touch Время (ч) / Самочувствие / Привычки / Питание / Что сделано / Заметки.
+The rest stays as the user wrote it.
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -18,6 +19,28 @@ class MealItem:
     fat: float
     carbs: float
     source: str = ""  # "reference" | "estimate" | "" — set by Claude parser
+
+
+@dataclass
+class WellbeingMed:
+    """One med row in the ## Самочувствие section."""
+
+    column_label: str  # short label as shown in the daily file, e.g. "Сейзар", "Гидр.К"
+    taken: bool
+    dose: str  # current dose string, e.g. "25" or "12.5"
+
+
+@dataclass
+class WellbeingData:
+    """Inputs for the ## Самочувствие section. Optional fields render as "—"."""
+
+    mood: int | None = None
+    anxiety: int | None = None
+    irritability: int | None = None
+    sleep_hours: float | None = None
+    weight: float | None = None  # rendered only when include_weight=True
+    include_weight: bool = False  # Saturday-only
+    meds: list[WellbeingMed] = field(default_factory=list)
 
 
 # --- Section helpers --------------------------------------------------------
@@ -47,6 +70,31 @@ def _section_body(md: str, title: str) -> str:
         if match.group("title").strip() == title:
             return match.group("body")
     raise ValueError(f"{title} section not found")
+
+
+def has_section(md: str, title: str) -> bool:
+    """True if `## <title>` exists in the markdown."""
+    for match in _SECTION_RE.finditer(md):
+        if match.group("title").strip() == title:
+            return True
+    return False
+
+
+def upsert_section(md: str, title: str, body: str) -> str:
+    """Replace the body of `## <title>` if it exists, else append a new section at EOF.
+
+    `body` is the text below the header, no leading `## <title>` line. The trailing
+    newline is normalized to one blank line before the section.
+    """
+    try:
+        return _replace_section_body(md, title, body)
+    except ValueError:
+        prefix = md if md.endswith("\n") else md + "\n"
+        # Make sure there's one blank line before the appended section
+        if not prefix.endswith("\n\n"):
+            prefix += "\n"
+        suffix = "" if body.endswith("\n") else "\n"
+        return f"{prefix}## {title}\n{body}{suffix}"
 
 
 # --- Notes / Done -----------------------------------------------------------
@@ -294,3 +342,86 @@ def append_meal(md: str, item: MealItem) -> str:
     )
 
     return _replace_section_body(md, "Питание", "\n".join(lines))
+
+
+# --- Wellbeing (## Самочувствие) -------------------------------------------
+
+
+def _signed_or_dash(v: int | None) -> str:
+    if v is None:
+        return "—"
+    if v > 0:
+        return f"+{v}"
+    return str(v)
+
+
+def _int_or_dash(v: int | None) -> str:
+    return "—" if v is None else str(v)
+
+
+def _float_or_dash(v: float | None) -> str:
+    if v is None:
+        return "—"
+    if v == int(v):
+        return str(int(v))
+    return f"{v:g}"
+
+
+def render_wellbeing_section(data: WellbeingData) -> str:
+    """Return the body of `## Самочувствие` (leading + trailing `\\n` for upsert)."""
+    lines = [
+        f"- Настроение: {_signed_or_dash(data.mood)}",
+        f"- Тревога: {_int_or_dash(data.anxiety)}",
+        f"- Раздражительность: {_int_or_dash(data.irritability)}",
+        f"- Сон (ч): {_float_or_dash(data.sleep_hours)}",
+    ]
+    if data.include_weight:
+        lines.append(f"- Вес: {_float_or_dash(data.weight)}")
+    for med in data.meds:
+        if med.taken:
+            lines.append(f"- {med.column_label}: ✓ {med.dose}")
+        else:
+            lines.append(f"- {med.column_label}: ✗")
+    body = "\n".join(lines)
+    return f"\n{body}\n"
+
+
+# --- Time tracking (## Время (ч)) ------------------------------------------
+
+_TIME_VPN_RE = re.compile(r"^(\s*-\s*VPN\s*:).*$", re.MULTILINE)
+_TIME_ENG_RE = re.compile(r"^(\s*-\s*Английский\s*:).*$", re.MULTILINE)
+
+
+def _format_hours(v: float | None) -> str:
+    if v is None:
+        return ""
+    if v == int(v):
+        return str(int(v))
+    return f"{v:g}"
+
+
+def update_time_section(md: str, *, vpn_hours: float | None, eng_hours: float | None) -> str:
+    """Fill in the `## Время (ч)` section's `- VPN:` and `- Английский:` lines.
+
+    Existing bullets are updated in-place; nothing else in the section moves.
+    A None value renders as an empty value (preserves `- VPN:`).
+    """
+    body = _section_body(md, "Время (ч)")
+    new_body = body
+    vpn_val = _format_hours(vpn_hours)
+    eng_val = _format_hours(eng_hours)
+    new_body = _TIME_VPN_RE.sub(rf"\1 {vpn_val}".rstrip(), new_body)
+    new_body = _TIME_ENG_RE.sub(rf"\1 {eng_val}".rstrip(), new_body)
+    return _replace_section_body(md, "Время (ч)", new_body)
+
+
+# --- Day plan (## 🗓 План на день) -----------------------------------------
+
+DAY_PLAN_TITLE = "🗓 План на день"
+
+
+def parse_day_plan(md: str) -> list[str]:
+    """Return non-empty bullets from the `## 🗓 План на день` section.
+
+    Empty placeholder `-` lines are skipped. Missing section → []."""
+    return _parse_bullets(md, DAY_PLAN_TITLE)

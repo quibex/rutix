@@ -27,6 +27,8 @@ class MoodEntry(Base):
     energy: Mapped[int | None] = mapped_column(Integer, nullable=True)
     sleep_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
     weight: Mapped[float | None] = mapped_column(Float, nullable=True)
+    vpn_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
+    eng_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
     notes: Mapped[str | None] = mapped_column(String, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,

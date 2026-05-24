@@ -1,4 +1,5 @@
-"""Daily flush: SQLite mood/meds for a given day → row in mood_tracker.md."""
+"""Daily flush: SQLite mood/meds for a given day → `## Самочувствие` + `## Время (ч)`
+sections in daily/<date>.md."""
 
 import logging
 from datetime import date
@@ -8,11 +9,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from rutix.db.models import FlushLog, MedActive, MedicationLog, MoodEntry
 from rutix.integrations.github import GitHubClient
-from rutix.markdown.mood_tracker import DayRow, MedColumn, render_row, update_day_row
+from rutix.markdown.daily import (
+    WellbeingData,
+    WellbeingMed,
+    render_wellbeing_section,
+    update_time_section,
+    upsert_section,
+)
+from rutix.time_utils import is_saturday
 
 logger = logging.getLogger(__name__)
 
-MOOD_TRACKER_PATH = "health/mood_tracker.md"
+WELLBEING_TITLE = "Самочувствие"
+
+
+def _daily_path(day: date) -> str:
+    return f"daily/{day.isoformat()}.md"
 
 
 async def flush_day(
@@ -20,11 +32,12 @@ async def flush_day(
     github: GitHubClient,
     day: date,
 ) -> str | None:
-    """Flush a single day's data to mood_tracker.md.
+    """Write today's wellbeing + time data into daily/<day>.md.
 
     Returns the new commit SHA on success, or None when:
     - already flushed (idempotent re-run),
     - no MoodEntry for that day (nothing to write),
+    - daily file doesn't exist in the repo,
     - content already matches (no-op).
     """
     period_id = f"day:{day.isoformat()}"
@@ -46,17 +59,15 @@ async def flush_day(
     log_rows = (await session.scalars(select(MedicationLog).where(MedicationLog.day == day))).all()
     taken_by_key = {r.med_key: r.taken for r in log_rows}
 
-    row = DayRow(
-        day=day.day,
+    well = WellbeingData(
         mood=mood.mood,
-        sleep_hours=mood.sleep_hours,
-        weight=mood.weight,
         anxiety=mood.anxiety,
         irritability=mood.irritability,
-        energy=mood.energy,
-        notes=mood.notes or "",
+        sleep_hours=mood.sleep_hours,
+        weight=mood.weight,
+        include_weight=is_saturday(day),
         meds=[
-            MedColumn(
+            WellbeingMed(
                 column_label=m.column_label,
                 taken=taken_by_key.get(m.key, False),
                 dose=m.current_dose,
@@ -65,21 +76,34 @@ async def flush_day(
         ],
     )
 
-    rendered = render_row(row)
-
-    file = await github.read(MOOD_TRACKER_PATH)
+    path = _daily_path(day)
+    file = await github.read(path)
     if file is None:
-        raise RuntimeError(f"{MOOD_TRACKER_PATH} not found in repo")
+        logger.warning("flush_day skipped — no daily file at %s", path)
+        return None
 
-    new_text = update_day_row(file.text, day.year, day.month, day.day, rendered)
+    new_text = upsert_section(file.text, WELLBEING_TITLE, render_wellbeing_section(well))
+
+    # Optional: also fill in `## Время (ч)` if the user tracked it via /track.
+    vpn_hours = getattr(mood, "vpn_hours", None)
+    eng_hours = getattr(mood, "eng_hours", None)
+    if vpn_hours is not None or eng_hours is not None:
+        try:
+            new_text = update_time_section(new_text, vpn_hours=vpn_hours, eng_hours=eng_hours)
+        except ValueError:
+            logger.warning(
+                "flush_day: no '## Время (ч)' section in %s — skipping time update",
+                path,
+            )
+
     if new_text == file.text:
         logger.info("flush_day no-op — content unchanged for %s", day)
         return None
 
     sha = await github.write(
-        MOOD_TRACKER_PATH,
+        path,
         new_text,
-        f"mood({day.isoformat()}): авто-запись из rutix-bot",
+        f"daily({day.isoformat()}): авто-запись из rutix-bot",
         sha=file.sha,
     )
 

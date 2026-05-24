@@ -64,3 +64,52 @@ def days_of_week(any_day_of_week: date) -> list[date]:
     """Mon..Sun for the ISO week containing the given date."""
     monday = any_day_of_week - timedelta(days=any_day_of_week.weekday())
     return [monday + timedelta(days=i) for i in range(7)]
+
+
+# --- Free-text hour parser (for /track VPN/English) -------------------------
+
+_WORD_HOURS = {
+    "полтора": 1.5,
+    "полчаса": 0.5,
+    "полчасика": 0.5,
+    "час": 1.0,
+    "часик": 1.0,
+    "два часа": 2.0,
+    "три часа": 3.0,
+    "ноль": 0.0,
+}
+
+_HOURS_RE = re.compile(
+    r"^\s*(\d+(?:[.,]\d+)?)\s*(?:ч|h|hrs?|hours?|часа?|часов)?\.?\s*$",
+    re.IGNORECASE,
+)
+_MINUTES_RE = re.compile(
+    r"^\s*(\d+)\s*(?:мин|min|минут|минута|минуты)\.?\s*$",
+    re.IGNORECASE,
+)
+
+
+def parse_hours_text(text: str) -> float | None:
+    """Parse user-typed durations into a float of hours.
+
+    Examples: "1.5" / "1,5" / "2ч" / "2 ч" / "30мин" / "полтора" / "полчаса"
+    Returns None for unparseable or negative input.
+    """
+    if not text:
+        return None
+    s = text.strip().lower()
+    if s in _WORD_HOURS:
+        return _WORD_HOURS[s]
+    m = _HOURS_RE.match(s)
+    if m:
+        v = float(m.group(1).replace(",", "."))
+        if v < 0:
+            return None
+        return v
+    m = _MINUTES_RE.match(s)
+    if m:
+        v = int(m.group(1)) / 60.0
+        if v < 0:
+            return None
+        return v
+    return None

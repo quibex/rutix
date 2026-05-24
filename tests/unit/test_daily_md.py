@@ -2,14 +2,21 @@ import pytest
 
 from rutix.markdown.daily import (
     MealItem,
+    WellbeingData,
+    WellbeingMed,
     append_done,
     append_meal,
     append_note,
+    has_section,
+    parse_day_plan,
     parse_done,
     parse_habit_labels,
     parse_meals,
     parse_notes,
+    render_wellbeing_section,
     update_habits_checked,
+    update_time_section,
+    upsert_section,
 )
 
 SAMPLE = """# Четверг, 14 мая
@@ -248,3 +255,153 @@ def test_parse_notes_returns_empty_when_section_missing():
 def test_parse_notes_preserves_order_and_multiple_bullets():
     md = "# x\n\n## Заметки\n\n- первая мысль\n- вторая мысль\n- третья\n"
     assert parse_notes(md) == ["первая мысль", "вторая мысль", "третья"]
+
+
+# --- upsert_section / has_section ---
+
+
+def test_upsert_section_replaces_existing_body():
+    md = "## A\n\nold\n\n## B\n\nb-body\n"
+    result = upsert_section(md, "A", "\nnew\n")
+    assert "## A\n\nnew\n" in result
+    assert "## B\n\nb-body" in result
+
+
+def test_upsert_section_appends_when_missing():
+    md = "# header\n\n## A\n\na-body\n"
+    result = upsert_section(md, "Самочувствие", "\n- x\n")
+    assert "## Самочувствие" in result
+    assert "## A" in result
+    # original A is intact
+    assert "a-body" in result
+
+
+def test_has_section_returns_true_only_when_present():
+    md = "## Питание\n\n|...|\n"
+    assert has_section(md, "Питание")
+    assert not has_section(md, "Самочувствие")
+
+
+# --- render_wellbeing_section ---
+
+
+def test_render_wellbeing_weekday_no_weight():
+    body = render_wellbeing_section(
+        WellbeingData(
+            mood=1,
+            anxiety=0,
+            irritability=0,
+            sleep_hours=8.0,
+            include_weight=False,
+            meds=[
+                WellbeingMed("Сейзар", taken=True, dose="25"),
+                WellbeingMed("Гидр.К", taken=True, dose="12.5"),
+            ],
+        )
+    )
+    assert "- Настроение: +1" in body
+    assert "- Тревога: 0" in body
+    assert "- Раздражительность: 0" in body
+    assert "- Сон (ч): 8" in body
+    assert "- Сейзар: ✓ 25" in body
+    assert "- Гидр.К: ✓ 12.5" in body
+    assert "Вес:" not in body
+
+
+def test_render_wellbeing_saturday_includes_weight():
+    body = render_wellbeing_section(WellbeingData(weight=57.0, include_weight=True))
+    assert "- Вес: 57" in body
+
+
+def test_render_wellbeing_unknown_values_render_as_dash():
+    body = render_wellbeing_section(WellbeingData())
+    assert "- Настроение: —" in body
+    assert "- Тревога: —" in body
+    assert "- Сон (ч): —" in body
+
+
+def test_render_wellbeing_med_not_taken_shows_cross():
+    body = render_wellbeing_section(
+        WellbeingData(meds=[WellbeingMed("Сейзар", taken=False, dose="25")])
+    )
+    assert "- Сейзар: ✗" in body
+    assert "✓" not in body
+
+
+def test_render_wellbeing_negative_mood():
+    body = render_wellbeing_section(WellbeingData(mood=-2))
+    assert "- Настроение: -2" in body
+
+
+def test_render_wellbeing_zero_mood_no_sign():
+    body = render_wellbeing_section(WellbeingData(mood=0))
+    assert "- Настроение: 0" in body
+
+
+# --- update_time_section ---
+
+_TIME_SAMPLE = """## Сон
+
+- Отбой:
+
+## Время (ч)
+
+- VPN:
+- Английский:
+
+## Привычки
+
+- [ ] x
+"""
+
+
+def test_update_time_section_fills_hours():
+    result = update_time_section(_TIME_SAMPLE, vpn_hours=2.0, eng_hours=1.0)
+    block = result.split("## Время (ч)", 1)[1].split("## Привычки", 1)[0]
+    assert "- VPN: 2" in block
+    assert "- Английский: 1" in block
+
+
+def test_update_time_section_renders_half_hours():
+    result = update_time_section(_TIME_SAMPLE, vpn_hours=0.5, eng_hours=1.5)
+    block = result.split("## Время (ч)", 1)[1].split("## Привычки", 1)[0]
+    assert "- VPN: 0.5" in block
+    assert "- Английский: 1.5" in block
+
+
+def test_update_time_section_none_leaves_blank():
+    result = update_time_section(_TIME_SAMPLE, vpn_hours=None, eng_hours=2.0)
+    block = result.split("## Время (ч)", 1)[1].split("## Привычки", 1)[0]
+    assert "- VPN:" in block and "VPN: 0" not in block
+    assert "- Английский: 2" in block
+
+
+def test_update_time_section_overwrites_existing_value():
+    pre = _TIME_SAMPLE.replace("- VPN:", "- VPN: 9")
+    result = update_time_section(pre, vpn_hours=1.0, eng_hours=None)
+    block = result.split("## Время (ч)", 1)[1].split("## Привычки", 1)[0]
+    assert "- VPN: 1" in block
+    assert "- VPN: 9" not in block
+
+
+def test_update_time_section_raises_when_missing():
+    md = "## Сон\n\n- Отбой:\n"
+    with pytest.raises(ValueError, match="Время"):
+        update_time_section(md, vpn_hours=1.0, eng_hours=1.0)
+
+
+# --- parse_day_plan ---
+
+
+def test_parse_day_plan_returns_bullets_in_order():
+    md = "## 🗓 План на день\n\n- утром бегать\n- встреча 14:00\n- вечером чтение\n\n## Сон\n"
+    assert parse_day_plan(md) == ["утром бегать", "встреча 14:00", "вечером чтение"]
+
+
+def test_parse_day_plan_skips_empty_placeholder():
+    md = "## 🗓 План на день\n\n-\n\n## Сон\n"
+    assert parse_day_plan(md) == []
+
+
+def test_parse_day_plan_missing_section_returns_empty():
+    assert parse_day_plan("## Сон\n") == []

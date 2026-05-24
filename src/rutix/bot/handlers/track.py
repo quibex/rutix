@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from rutix.db.models import MedActive, MedicationLog, MoodEntry
 from rutix.settings import Settings
-from rutix.time_utils import is_saturday, subjective_today
+from rutix.time_utils import is_saturday, parse_hours_text, subjective_today
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,10 @@ class TrackStates(StatesGroup):
     energy = State()
     sleep = State()
     meds = State()
+    vpn = State()
+    vpn_input = State()
+    english = State()
+    english_input = State()
     weight = State()
 
 
@@ -91,6 +95,25 @@ def _med_keyboard(key: str) -> InlineKeyboardMarkup:
 
 def _weight_skip_keyboard() -> InlineKeyboardMarkup:
     return _kb_grid([("Пропустить", "weight:skip")], cols=1)
+
+
+def _hours_keyboard(prefix: str) -> InlineKeyboardMarkup:
+    return _kb_grid(
+        [
+            ("0", f"{prefix}:0"),
+            ("0.5", f"{prefix}:0.5"),
+            ("1", f"{prefix}:1"),
+            ("2", f"{prefix}:2"),
+            ("✏️ ввести", f"{prefix}:input"),
+        ],
+        cols=5,
+    )
+
+
+def _fmt_hours(v: float | None) -> str:
+    if v is None:
+        return "—"
+    return str(int(v)) if v == int(v) else f"{v:g}"
 
 
 @router.message(Command("track"))
@@ -191,7 +214,7 @@ async def cb_sleep(
     if meds_pending:
         await _ask_next_med(cb.message, state, session_factory)
     else:
-        await _maybe_ask_weight_or_save(cb.message, state, session_factory)
+        await _ask_vpn(cb.message, state)
     await cb.answer()
 
 
@@ -199,7 +222,7 @@ async def _ask_next_med(message: Message, state: FSMContext, session_factory):
     data = await state.get_data()
     pending = list(data.get("meds_pending", []))
     if not pending:
-        return await _maybe_ask_weight_or_save(message, state, session_factory)
+        return await _ask_vpn(message, state)
     next_key = pending[0]
     async with session_factory() as session:
         med = await session.get(MedActive, next_key)
@@ -230,21 +253,109 @@ async def cb_med(
     if pending:
         await _ask_next_med(cb.message, state, session_factory)
     else:
+        await _ask_vpn(cb.message, state)
+    await cb.answer()
+
+
+# --- VPN / English (free hours via inline buttons + text fallback) ---------
+
+
+async def _ask_vpn(message: Message, state: FSMContext):
+    await state.set_state(TrackStates.vpn)
+    await message.edit_text("VPN сегодня (ч)?", reply_markup=_hours_keyboard("vpn"))
+
+
+async def _ask_english(message: Message, state: FSMContext, *, use_answer: bool = False):
+    await state.set_state(TrackStates.english)
+    text = "English сегодня (ч)?"
+    if use_answer:
+        await message.answer(text, reply_markup=_hours_keyboard("eng"))
+    else:
+        await message.edit_text(text, reply_markup=_hours_keyboard("eng"))
+
+
+@router.callback_query(TrackStates.vpn, F.data.startswith("vpn:"))
+async def cb_vpn(
+    cb: CallbackQuery,
+    state: FSMContext,
+    session_factory: async_sessionmaker[AsyncSession],
+):
+    payload = cb.data.split(":", 1)[1]
+    if payload == "input":
+        await state.set_state(TrackStates.vpn_input)
+        await cb.message.edit_text(
+            "VPN — сколько часов? Напишите числом (например, 1.5, 2ч, полтора)."
+        )
+    else:
+        await state.update_data(vpn_hours=float(payload))
+        await _ask_english(cb.message, state)
+    await cb.answer()
+
+
+@router.message(TrackStates.vpn_input, F.text)
+async def msg_vpn_input(
+    message: Message,
+    state: FSMContext,
+    session_factory: async_sessionmaker[AsyncSession],
+):
+    hours = parse_hours_text(message.text)
+    if hours is None:
+        await message.answer("⚠️ Не понял. Попробуйте ещё раз: число часов (1.5, 2ч, полтора).")
+        return
+    await state.update_data(vpn_hours=hours)
+    await _ask_english(message, state, use_answer=True)
+
+
+@router.callback_query(TrackStates.english, F.data.startswith("eng:"))
+async def cb_english(
+    cb: CallbackQuery,
+    state: FSMContext,
+    session_factory: async_sessionmaker[AsyncSession],
+):
+    payload = cb.data.split(":", 1)[1]
+    if payload == "input":
+        await state.set_state(TrackStates.english_input)
+        await cb.message.edit_text(
+            "English — сколько часов? Напишите числом (например, 1.5, 2ч, полтора)."
+        )
+    else:
+        await state.update_data(eng_hours=float(payload))
         await _maybe_ask_weight_or_save(cb.message, state, session_factory)
     await cb.answer()
 
 
-async def _maybe_ask_weight_or_save(message: Message, state: FSMContext, session_factory):
+@router.message(TrackStates.english_input, F.text)
+async def msg_english_input(
+    message: Message,
+    state: FSMContext,
+    session_factory: async_sessionmaker[AsyncSession],
+):
+    hours = parse_hours_text(message.text)
+    if hours is None:
+        await message.answer("⚠️ Не понял. Попробуйте ещё раз: число часов (1.5, 2ч, полтора).")
+        return
+    await state.update_data(eng_hours=hours)
+    await _maybe_ask_weight_or_save(message, state, session_factory, use_answer=True)
+
+
+async def _maybe_ask_weight_or_save(
+    message: Message,
+    state: FSMContext,
+    session_factory,
+    *,
+    use_answer: bool = False,
+):
     data = await state.get_data()
     day = date.fromisoformat(data["day"])
     if is_saturday(day):
         await state.set_state(TrackStates.weight)
-        await message.edit_text(
-            "Какой сегодня вес (кг)? Напишите числом или нажмите «Пропустить».",
-            reply_markup=_weight_skip_keyboard(),
-        )
+        prompt = "Какой сегодня вес (кг)? Напишите числом или нажмите «Пропустить»."
+        if use_answer:
+            await message.answer(prompt, reply_markup=_weight_skip_keyboard())
+        else:
+            await message.edit_text(prompt, reply_markup=_weight_skip_keyboard())
     else:
-        await _save_and_finish(message, state, session_factory)
+        await _save_and_finish(message, state, session_factory, use_answer=use_answer)
 
 
 @router.message(TrackStates.weight, F.text)
@@ -290,6 +401,8 @@ async def _save_and_finish(
             existing.irritability = data.get("irritability")
             existing.energy = data.get("energy")
             existing.sleep_hours = data.get("sleep_hours")
+            existing.vpn_hours = data.get("vpn_hours")
+            existing.eng_hours = data.get("eng_hours")
             if "weight" in data:
                 existing.weight = data["weight"]
         else:
@@ -301,6 +414,8 @@ async def _save_and_finish(
                     irritability=data.get("irritability"),
                     energy=data.get("energy"),
                     sleep_hours=data.get("sleep_hours"),
+                    vpn_hours=data.get("vpn_hours"),
+                    eng_hours=data.get("eng_hours"),
                     weight=data.get("weight"),
                 )
             )
@@ -324,7 +439,9 @@ async def _save_and_finish(
         f"тревога {data.get('anxiety', '?')}, "
         f"раздр. {data.get('irritability', '?')}, "
         f"энергия {data.get('energy', '?'):+d}, "
-        f"сон {data.get('sleep_hours', '?')}ч"
+        f"сон {data.get('sleep_hours', '?')}ч, "
+        f"VPN {_fmt_hours(data.get('vpn_hours'))}ч, "
+        f"English {_fmt_hours(data.get('eng_hours'))}ч"
     )
     if "weight" in data:
         summary += f", вес {data['weight']}кг"

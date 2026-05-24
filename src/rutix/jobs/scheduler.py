@@ -4,6 +4,7 @@
 - update_habits_retry (06:00, 08:00): re-run update_habits(yesterday) if 03:00 lost
   it to a transient Todoist outage. Idempotent — silent unless it actually changes
   something or the 08:00 final attempt still errors.
+- daily_plan_ping (09:00): post today's `## 🗓 План на день` to the user.
 - med_reminder_tick (every minute): per-pill reminder — fires for meds whose
   `reminder_time` matches the current minute. Silent unless something is due.
 - evening_ping (21:00): nudge user to /track if they haven't yet
@@ -22,6 +23,7 @@ from rutix.db.models import MoodEntry
 from rutix.integrations.claude import ClaudeClient
 from rutix.integrations.github import GitHubClient
 from rutix.integrations.todoist import TodoistClient
+from rutix.jobs.daily_plan import daily_plan_ping
 from rutix.jobs.flush_day import flush_day
 from rutix.jobs.flush_week import FlushWeekResult, flush_week
 from rutix.jobs.med_reminder import med_reminder_tick
@@ -315,6 +317,12 @@ def make_scheduler(
         except Exception:
             logger.exception("failed to send update_habits_retry message")
 
+    async def daily_plan():
+        try:
+            await daily_plan_ping(github, bot, telegram_user_id, tz)
+        except Exception:
+            logger.exception("daily_plan_ping failed")
+
     async def med_reminder():
         try:
             await med_reminder_tick(session_factory, bot, telegram_user_id, tz)
@@ -345,6 +353,12 @@ def make_scheduler(
         trigger=CronTrigger(hour=8, minute=0, timezone=ZoneInfo(tz)),
         kwargs={"is_final_attempt": True},
         id="update_habits_retry_08",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        daily_plan,
+        trigger=CronTrigger(hour=9, minute=0, timezone=ZoneInfo(tz)),
+        id="daily_plan_ping",
         replace_existing=True,
     )
     scheduler.add_job(

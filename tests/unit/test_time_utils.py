@@ -6,6 +6,7 @@ from rutix.time_utils import (
     extract_day_hint,
     is_saturday,
     is_sunday,
+    parse_hours_text,
     subjective_today,
     week_id,
     yesterday_of,
@@ -136,3 +137,50 @@ def test_extract_day_hint_does_not_match_prefix_of_other_word():
     day, rest = extract_day_hint("вчерашний хлеб", TODAY)
     assert day == TODAY
     assert rest == "вчерашний хлеб"
+
+
+# --- parse_hours_text ---
+
+
+def test_parse_hours_text_plain_number():
+    assert parse_hours_text("1.5") == 1.5
+    assert parse_hours_text("0") == 0.0
+    assert parse_hours_text("2") == 2.0
+
+
+def test_parse_hours_text_comma_decimal():
+    assert parse_hours_text("1,5") == 1.5
+
+
+def test_parse_hours_text_with_ch_suffix():
+    assert parse_hours_text("2ч") == 2.0
+    assert parse_hours_text("2 ч") == 2.0
+    assert parse_hours_text("1.5ч") == 1.5
+    assert parse_hours_text("3 часа") == 3.0
+    assert parse_hours_text("5 часов") == 5.0
+
+
+def test_parse_hours_text_english_suffix():
+    assert parse_hours_text("2h") == 2.0
+    assert parse_hours_text("1.5 hrs") == 1.5
+
+
+def test_parse_hours_text_minutes_to_hours():
+    assert parse_hours_text("30мин") == 0.5
+    assert parse_hours_text("90 минут") == 1.5
+
+
+def test_parse_hours_text_words():
+    assert parse_hours_text("полтора") == 1.5
+    assert parse_hours_text("полчаса") == 0.5
+    assert parse_hours_text("Полтора") == 1.5
+
+
+def test_parse_hours_text_returns_none_on_garbage():
+    assert parse_hours_text("abc") is None
+    assert parse_hours_text("") is None
+    assert parse_hours_text("две банки") is None
+
+
+def test_parse_hours_text_rejects_negative():
+    assert parse_hours_text("-1") is None
