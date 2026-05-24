@@ -25,6 +25,7 @@ from rutix.integrations.todoist import TodoistClient
 from rutix.jobs.flush_day import flush_day
 from rutix.jobs.flush_week import FlushWeekResult, flush_week
 from rutix.jobs.med_reminder import med_reminder_tick
+from rutix.jobs.reschedule_overdue import RescheduleResult, reschedule_overdue
 from rutix.jobs.update_habits import UpdateHabitsResult, update_habits
 from rutix.time_utils import subjective_today, week_id, yesterday_of
 
@@ -105,6 +106,38 @@ def _fmt_flush_week_line(
     )
 
 
+_MAX_LISTED_RESCHEDULES = 10
+
+
+def _fmt_reschedule_lines(result: "RescheduleResult | Exception") -> list[str]:
+    if isinstance(result, Exception):
+        return [f"⚠️ reschedule: ошибка — {type(result).__name__}: {result}"]
+    lines: list[str] = []
+    if result.pulled_back:
+        lines.append(f"⏪ pull-back: {len(result.pulled_back)} задач(и)")
+        for c in result.pulled_back[:_MAX_LISTED_RESCHEDULES]:
+            lines.append(f"   • {c}")
+        if len(result.pulled_back) > _MAX_LISTED_RESCHEDULES:
+            lines.append(f"   … и ещё {len(result.pulled_back) - _MAX_LISTED_RESCHEDULES}")
+    if result.pushed_forward:
+        lines.append(f"⏩ push-forward: {len(result.pushed_forward)} задач(и)")
+        for c in result.pushed_forward[:_MAX_LISTED_RESCHEDULES]:
+            lines.append(f"   • {c}")
+        if len(result.pushed_forward) > _MAX_LISTED_RESCHEDULES:
+            lines.append(f"   … и ещё {len(result.pushed_forward) - _MAX_LISTED_RESCHEDULES}")
+    if result.skipped:
+        lines.append(
+            f"⏭ reschedule: {len(result.skipped)} просроченных пропущено (recurrence не понятен)"
+        )
+        for c in result.skipped[:_MAX_LISTED_RESCHEDULES]:
+            lines.append(f"   • {c}")
+    if result.errors:
+        lines.append(f"⚠️ reschedule: {len(result.errors)} ошибок")
+        for msg in result.errors[:_MAX_LISTED_RESCHEDULES]:
+            lines.append(f"   • {msg}")
+    return lines
+
+
 def build_retry_summary(
     target: date,
     result: "UpdateHabitsResult | Exception",
@@ -151,10 +184,13 @@ def build_3am_summary(
     flush_day_outcome: "str | Exception | None",
     update_habits_outcome: "UpdateHabitsResult | Exception",
     flush_week_outcome: "FlushWeekResult | Exception | None",
+    reschedule_outcome: "RescheduleResult | Exception | None" = None,
 ) -> str:
     lines = [f"🌅 3am job: {today.isoformat()}"]
     lines.append(_fmt_flush_day_line(target.isoformat(), flush_day_outcome))
     lines.extend(_fmt_update_habits_lines(target.isoformat(), update_habits_outcome))
+    if reschedule_outcome is not None:
+        lines.extend(_fmt_reschedule_lines(reschedule_outcome))
     is_monday = today.weekday() == 0
     wid = week_id(yesterday_of(today)) if is_monday else ""
     lines.append(_fmt_flush_week_line(is_monday, wid, flush_week_outcome))
@@ -201,6 +237,7 @@ def make_scheduler(
 
         flush_day_outcome: str | Exception | None
         update_habits_outcome: UpdateHabitsResult | Exception
+        reschedule_outcome: RescheduleResult | Exception
         flush_week_outcome: FlushWeekResult | Exception | None
 
         async with session_factory() as session:
@@ -218,6 +255,13 @@ def make_scheduler(
             logger.exception("update_habits failed")
             update_habits_outcome = e
 
+        try:
+            reschedule_outcome = await reschedule_overdue(todoist, today)
+            logger.info("reschedule_overdue result: %s", reschedule_outcome)
+        except Exception as e:
+            logger.exception("reschedule_overdue failed")
+            reschedule_outcome = e
+
         async with session_factory() as session:
             try:
                 flush_week_outcome = await flush_week(session, github, today, claude, todoist)
@@ -232,6 +276,7 @@ def make_scheduler(
             flush_day_outcome=flush_day_outcome,
             update_habits_outcome=update_habits_outcome,
             flush_week_outcome=flush_week_outcome,
+            reschedule_outcome=reschedule_outcome,
         )
         try:
             await bot.send_message(chat_id=telegram_user_id, text=summary)

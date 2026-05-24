@@ -1,6 +1,7 @@
 from datetime import date
 
 from rutix.jobs.flush_week import FlushWeekResult
+from rutix.jobs.reschedule_overdue import RescheduleResult
 from rutix.jobs.scheduler import build_3am_summary, build_retry_summary
 from rutix.jobs.update_habits import UpdateHabitsResult
 
@@ -217,6 +218,108 @@ def test_retry_summary_exception_notifies_on_final_attempt():
     assert "RuntimeError" in msg
     assert "Todoist still down" in msg
     assert "2026-05-13" in msg
+
+
+# --- reschedule_overdue lines ---
+
+
+def test_summary_omits_reschedule_section_when_outcome_none():
+    """Backwards compat: callers that don't pass reschedule_outcome shouldn't get noise."""
+    summary = build_3am_summary(
+        today=THURSDAY,
+        target=WEDNESDAY,
+        flush_day_outcome="abc1234",
+        update_habits_outcome=UpdateHabitsResult(sha=None, marked=[]),
+        flush_week_outcome=None,
+    )
+    assert "pull-back" not in summary
+    assert "push-forward" not in summary
+    assert "reschedule" not in summary
+
+
+def test_summary_omits_reschedule_lines_when_nothing_happened():
+    """No pulls, no pushes, no errors → silent. Don't show '⏪ 0 / ⏩ 0'."""
+    result = RescheduleResult(
+        pulled_back=[], pushed_forward=[], skipped=[], errors=[]
+    )
+    summary = build_3am_summary(
+        today=THURSDAY,
+        target=WEDNESDAY,
+        flush_day_outcome="abc1234",
+        update_habits_outcome=UpdateHabitsResult(sha=None, marked=[]),
+        flush_week_outcome=None,
+        reschedule_outcome=result,
+    )
+    assert "pull-back" not in summary
+    assert "push-forward" not in summary
+    assert "⚠️ reschedule" not in summary
+
+
+def test_summary_shows_pull_back_list():
+    result = RescheduleResult(
+        pulled_back=["Anki", "Skincare PM"],
+        pushed_forward=[],
+        skipped=[],
+        errors=[],
+    )
+    summary = build_3am_summary(
+        today=THURSDAY,
+        target=WEDNESDAY,
+        flush_day_outcome="abc",
+        update_habits_outcome=UpdateHabitsResult(sha=None, marked=[]),
+        flush_week_outcome=None,
+        reschedule_outcome=result,
+    )
+    assert "⏪ pull-back: 2 задач(и)" in summary
+    assert "• Anki" in summary
+    assert "• Skincare PM" in summary
+
+
+def test_summary_shows_push_forward_list():
+    result = RescheduleResult(
+        pulled_back=[],
+        pushed_forward=["Купить хлеб"],
+        skipped=[],
+        errors=[],
+    )
+    summary = build_3am_summary(
+        today=THURSDAY,
+        target=WEDNESDAY,
+        flush_day_outcome="abc",
+        update_habits_outcome=UpdateHabitsResult(sha=None, marked=[]),
+        flush_week_outcome=None,
+        reschedule_outcome=result,
+    )
+    assert "⏩ push-forward: 1 задач(и)" in summary
+    assert "• Купить хлеб" in summary
+
+
+def test_summary_shows_skipped_unparseable_recurrence():
+    result = RescheduleResult(
+        pulled_back=[], pushed_forward=[], skipped=["Стрижка"], errors=[]
+    )
+    summary = build_3am_summary(
+        today=THURSDAY,
+        target=WEDNESDAY,
+        flush_day_outcome="abc",
+        update_habits_outcome=UpdateHabitsResult(sha=None, marked=[]),
+        flush_week_outcome=None,
+        reschedule_outcome=result,
+    )
+    assert "1 просроченных пропущено" in summary
+    assert "• Стрижка" in summary
+
+
+def test_summary_shows_reschedule_exception():
+    summary = build_3am_summary(
+        today=THURSDAY,
+        target=WEDNESDAY,
+        flush_day_outcome="abc",
+        update_habits_outcome=UpdateHabitsResult(sha=None, marked=[]),
+        flush_week_outcome=None,
+        reschedule_outcome=RuntimeError("Todoist 500"),
+    )
+    assert "⚠️ reschedule: ошибка — RuntimeError: Todoist 500" in summary
 
 
 def test_retry_summary_no_op_silent_on_final_attempt():

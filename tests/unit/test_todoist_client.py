@@ -269,6 +269,126 @@ async def test_403_not_retried(client):
     await client.aclose()
 
 
+# --- fetch_task / fetch_active_tasks / update_task_due_date / completed_task_ids_between ---
+
+
+@respx.mock
+async def test_fetch_task_returns_task_dict(client):
+    respx.get("https://api.todoist.com/api/v1/tasks/abc123").mock(
+        return_value=httpx.Response(
+            200, json={"id": "abc123", "content": "Anki", "due": {"date": "2026-05-25"}}
+        )
+    )
+    t = await client.fetch_task("abc123")
+    assert t is not None
+    assert t["id"] == "abc123"
+    assert t["content"] == "Anki"
+    await client.aclose()
+
+
+@respx.mock
+async def test_fetch_task_returns_none_on_404(client):
+    respx.get("https://api.todoist.com/api/v1/tasks/missing").mock(
+        return_value=httpx.Response(404)
+    )
+    assert await client.fetch_task("missing") is None
+    await client.aclose()
+
+
+@respx.mock
+async def test_update_task_due_date_posts_yyyy_mm_dd(client):
+    route = respx.post("https://api.todoist.com/api/v1/tasks/abc123").mock(
+        return_value=httpx.Response(200, json={"id": "abc123"})
+    )
+    await client.update_task_due_date("abc123", date(2026, 5, 24))
+    assert route.called
+    import json
+
+    body = json.loads(route.calls[0].request.content)
+    assert body == {"due_date": "2026-05-24"}
+    await client.aclose()
+
+
+@respx.mock
+async def test_fetch_active_tasks_handles_paginated_envelope(client):
+    route = respx.get("https://api.todoist.com/api/v1/tasks").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json={
+                    "results": [{"id": "1", "content": "A"}],
+                    "next_cursor": "page2",
+                },
+            ),
+            httpx.Response(
+                200,
+                json={"results": [{"id": "2", "content": "B"}], "next_cursor": None},
+            ),
+        ]
+    )
+    tasks = await client.fetch_active_tasks()
+    assert [t["id"] for t in tasks] == ["1", "2"]
+    assert route.call_count == 2
+    await client.aclose()
+
+
+@respx.mock
+async def test_fetch_active_tasks_handles_bare_list_response(client):
+    """Some Todoist endpoints return a bare list, not a paginated envelope.
+    Defensive: handle both."""
+    respx.get("https://api.todoist.com/api/v1/tasks").mock(
+        return_value=httpx.Response(200, json=[{"id": "1"}, {"id": "2"}])
+    )
+    tasks = await client.fetch_active_tasks()
+    assert [t["id"] for t in tasks] == ["1", "2"]
+    await client.aclose()
+
+
+@respx.mock
+async def test_completed_task_ids_between_returns_object_ids_in_window(client):
+    """Aware-datetime window — converts to UTC, returns object_ids from completion events."""
+    respx.get("https://api.todoist.com/api/v1/activities").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "results": [
+                    # 2026-05-24 00:00 UTC = 03:00 MSK — IN window [03:00 MSK, 06:00 MSK)
+                    {
+                        "event_type": "completed",
+                        "event_date": "2026-05-24T00:00:00Z",
+                        "object_id": "task1",
+                        "extra_data": {"content": "Anki"},
+                    },
+                    # 2026-05-24 02:59 UTC = 05:59 MSK — IN
+                    {
+                        "event_type": "completed",
+                        "event_date": "2026-05-24T02:59:00Z",
+                        "object_id": "task2",
+                        "extra_data": {"content": "X"},
+                    },
+                    # 2026-05-24 03:00 UTC = 06:00 MSK — OUT (boundary)
+                    {
+                        "event_type": "completed",
+                        "event_date": "2026-05-24T03:00:00Z",
+                        "object_id": "task3",
+                        "extra_data": {"content": "Y"},
+                    },
+                ],
+                "next_cursor": None,
+            },
+        )
+    )
+    from datetime import datetime as dt
+    from zoneinfo import ZoneInfo
+
+    msk = ZoneInfo("Europe/Moscow")
+    start = dt(2026, 5, 24, 3, 0, tzinfo=msk)  # 03:00 MSK = 00:00 UTC
+    end = dt(2026, 5, 24, 6, 0, tzinfo=msk)  # 06:00 MSK = 03:00 UTC
+    ids = await client.completed_task_ids_between(start, end)
+    assert ids == {"task1", "task2"}
+    await client.aclose()
+
+
 @respx.mock
 async def test_skips_events_with_missing_extra_data(client):
     """Defensive: events without extra_data.content shouldn't crash."""
