@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Single-user Telegram bot (whitelisted by numeric `TELEGRAM_USER_ID`) that tracks mental state, medications, and nutrition. Persists structured daily/weekly data into a private Obsidian-backed GitHub repo (default `quibex/life`). Long-polling; no inbound traffic. One container, one VPS.
+Single-user Telegram bot (whitelisted by numeric `TELEGRAM_USER_ID`) that tracks mental state, medications, and nutrition. Persists structured daily data into a private Obsidian-backed GitHub repo (default `quibex/life`). Long-polling; no inbound traffic. One container, one VPS.
 
 Bot UX language is Russian — preserve Russian strings in user-facing messages, button labels, and commit messages when editing handlers.
 
@@ -41,15 +41,23 @@ Prod VPS is reachable as `ssh monitor` (alias in `~/.ssh/config` → `193.109.19
 
 ### Two-tier persistence — SQLite is a buffer, GitHub is the source of truth
 
-`MoodEntry` and `MedicationLog` hold the **current week only**. They get flushed to markdown files in `quibex/life` and then **deleted** by `flush_week` on Monday 03:00. Anything written there is ephemeral by design — don't add code that reads from SQLite for data older than 7 days.
+`MoodEntry` and `MedicationLog` are write-buffered in SQLite by `/track` and then flushed by `flush_day` into the daily file's `## Самочувствие` (and `## Время (ч)`) sections. There is no weekly closure — old SQLite rows just sit there harmlessly; the source of truth lives in the daily `.md` files.
 
-`MedActive` (current med protocol) and `FlushLog` (idempotency ledger) are persistent. `FlushLog.period_id` uses `day:<iso>` / `week:<id>` keys — the flush jobs short-circuit when an entry exists.
+`MedActive` (current med protocol) and `FlushLog` (idempotency ledger) are persistent. `FlushLog.period_id` uses `day:<iso>` keys — `flush_day` short-circuits when an entry exists.
 
 The GitHub `Contents API` writes are atomic per file: `read()` returns text + SHA, `write()` requires that SHA for updates. A SHA mismatch will raise — there's no built-in retry. Caller decides.
 
-### Cron is `daily_3am` + `evening_ping`, not three separate jobs
+### Cron jobs
 
-[src/rutix/jobs/scheduler.py](src/rutix/jobs/scheduler.py) registers exactly two cron triggers. `daily_3am` runs `flush_day(yesterday) → update_habits(yesterday) → flush_week(today)` in sequence; each is wrapped in its own try/except so a failure in one doesn't skip the others. `/sync` is a manual trigger that calls **only** `flush_day` for yesterday.
+[src/rutix/jobs/scheduler.py](src/rutix/jobs/scheduler.py) registers daily-only crons (no weekly job — the user plans the next week themselves and seeds `## 🗓 План на день` by hand in each daily file):
+
+- `daily_3am` (03:00) → `flush_day(yesterday)` + `update_habits(yesterday)` + `reschedule_overdue(today)`, each in its own try/except.
+- `update_habits_retry` (06:00, 08:00) — catch-up for Todoist outages.
+- `daily_plan_ping` (09:00) → reads `## 🗓 План на день` from today's daily file and posts it.
+- `med_reminder_tick` (every minute) — fires for active meds whose `reminder_time` matches now.
+- `evening_ping` (21:00) — nudges to `/track` if not done.
+
+`/sync` is a manual trigger that calls only `flush_day` for yesterday.
 
 ### Subjective day (3am boundary)
 
@@ -61,7 +69,7 @@ The GitHub `Contents API` writes are atomic per file: `read()` returns text + SH
 
 ### Markdown is parsed and surgically edited, not regenerated
 
-[src/rutix/markdown/daily.py](src/rutix/markdown/daily.py) and [mood_tracker.py](src/rutix/markdown/mood_tracker.py) edit specific sections (`## Питание`, `## Заметки`, etc.) inside files the user maintains in Obsidian. **Never rewrite a whole file** — preserve unrelated sections and trailing whitespace. `flush_day` writes a single row; `flush_week` is the only path that creates files from scratch (`weekly/<id>.md`, `nutrition/<id>.md`).
+[src/rutix/markdown/daily.py](src/rutix/markdown/daily.py) edits specific sections (`## Самочувствие`, `## Время (ч)`, `## Питание`, `## Привычки`, `## Что сделано`, `## Заметки`) inside daily files the user maintains in Obsidian. **Never rewrite a whole file** — preserve unrelated sections and trailing whitespace. `upsert_section` will replace an existing `## <title>` body or append the section at EOF if it's missing.
 
 `update_habits` compares only the checkbox lines via `_checkbox_lines()` (not the whole text) to decide whether anything changed — cosmetic whitespace diffs from the regex edit are expected.
 

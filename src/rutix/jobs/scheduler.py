@@ -1,6 +1,6 @@
 """APScheduler — recurring jobs:
 
-- daily_3am (03:00): flush_day(yesterday) + update_habits(yesterday) + flush_week(today)
+- daily_3am (03:00): flush_day(yesterday) + update_habits(yesterday) + reschedule_overdue(today)
 - update_habits_retry (06:00, 08:00): re-run update_habits(yesterday) if 03:00 lost
   it to a transient Todoist outage. Idempotent — silent unless it actually changes
   something or the 08:00 final attempt still errors.
@@ -25,11 +25,10 @@ from rutix.integrations.github import GitHubClient
 from rutix.integrations.todoist import TodoistClient
 from rutix.jobs.daily_plan import daily_plan_ping
 from rutix.jobs.flush_day import flush_day
-from rutix.jobs.flush_week import FlushWeekResult, flush_week
 from rutix.jobs.med_reminder import med_reminder_tick
 from rutix.jobs.reschedule_overdue import RescheduleResult, reschedule_overdue
 from rutix.jobs.update_habits import UpdateHabitsResult, update_habits
-from rutix.time_utils import subjective_today, week_id, yesterday_of
+from rutix.time_utils import subjective_today, yesterday_of
 
 logger = logging.getLogger(__name__)
 
@@ -92,20 +91,6 @@ def _fmt_update_habits_lines(
     if len(result.appended_done) > _MAX_MARKED_IN_MESSAGE:
         lines.append(f"   ↳ … и ещё {len(result.appended_done) - _MAX_MARKED_IN_MESSAGE}")
     return lines
-
-
-def _fmt_flush_week_line(
-    today_is_monday: bool, wid: str, result: "FlushWeekResult | Exception | None"
-) -> str:
-    if not today_is_monday:
-        return "⏭ flush_week: не понедельник, пропущено"
-    if isinstance(result, Exception):
-        return f"⚠️ flush_week {wid}: ошибка — {type(result).__name__}: {result}"
-    if result is None:
-        return f"⏭ flush_week {wid}: уже записано"
-    return (
-        f"✅ flush_week {wid}: weekly+nutrition+thoughts+next-week записаны{_fmt_sha(result.sha)}"
-    )
 
 
 _MAX_LISTED_RESCHEDULES = 10
@@ -185,7 +170,6 @@ def build_3am_summary(
     target: date,
     flush_day_outcome: "str | Exception | None",
     update_habits_outcome: "UpdateHabitsResult | Exception",
-    flush_week_outcome: "FlushWeekResult | Exception | None",
     reschedule_outcome: "RescheduleResult | Exception | None" = None,
 ) -> str:
     lines = [f"🌅 3am job: {today.isoformat()}"]
@@ -193,9 +177,6 @@ def build_3am_summary(
     lines.extend(_fmt_update_habits_lines(target.isoformat(), update_habits_outcome))
     if reschedule_outcome is not None:
         lines.extend(_fmt_reschedule_lines(reschedule_outcome))
-    is_monday = today.weekday() == 0
-    wid = week_id(yesterday_of(today)) if is_monday else ""
-    lines.append(_fmt_flush_week_line(is_monday, wid, flush_week_outcome))
     return "\n".join(lines)
 
 
@@ -240,7 +221,6 @@ def make_scheduler(
         flush_day_outcome: str | Exception | None
         update_habits_outcome: UpdateHabitsResult | Exception
         reschedule_outcome: RescheduleResult | Exception
-        flush_week_outcome: FlushWeekResult | Exception | None
 
         async with session_factory() as session:
             try:
@@ -264,36 +244,17 @@ def make_scheduler(
             logger.exception("reschedule_overdue failed")
             reschedule_outcome = e
 
-        async with session_factory() as session:
-            try:
-                flush_week_outcome = await flush_week(session, github, today, claude, todoist)
-                logger.info("flush_week result: %s", flush_week_outcome)
-            except Exception as e:
-                logger.exception("flush_week failed")
-                flush_week_outcome = e
-
         summary = build_3am_summary(
             today=today,
             target=target,
             flush_day_outcome=flush_day_outcome,
             update_habits_outcome=update_habits_outcome,
-            flush_week_outcome=flush_week_outcome,
             reschedule_outcome=reschedule_outcome,
         )
         try:
             await bot.send_message(chat_id=telegram_user_id, text=summary)
         except Exception:
             logger.exception("failed to send 3am summary")
-
-        # Standalone weekly recap from Claude — sent as a separate message
-        # so it isn't lost in the technical 3am summary.
-        if isinstance(flush_week_outcome, FlushWeekResult) and flush_week_outcome.user_message:
-            try:
-                await bot.send_message(
-                    chat_id=telegram_user_id, text=flush_week_outcome.user_message
-                )
-            except Exception:
-                logger.exception("failed to send weekly recap message")
 
     async def update_habits_retry(is_final_attempt: bool):
         today = subjective_today(datetime.now(ZoneInfo(tz)), tz)

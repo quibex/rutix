@@ -1,17 +1,14 @@
 from datetime import date
 
-from rutix.jobs.flush_week import FlushWeekResult
 from rutix.jobs.reschedule_overdue import RescheduleResult
 from rutix.jobs.scheduler import build_3am_summary, build_retry_summary
 from rutix.jobs.update_habits import UpdateHabitsResult
 
 THURSDAY = date(2026, 5, 14)
 WEDNESDAY = date(2026, 5, 13)
-MONDAY = date(2026, 5, 18)
-SUNDAY = date(2026, 5, 17)
 
 
-def test_summary_happy_path_weekday():
+def test_summary_happy_path():
     summary = build_3am_summary(
         today=THURSDAY,
         target=WEDNESDAY,
@@ -19,14 +16,14 @@ def test_summary_happy_path_weekday():
         update_habits_outcome=UpdateHabitsResult(
             sha="1234567abcdef", marked=["📚 Anki", "🌅 Skincare AM"]
         ),
-        flush_week_outcome=None,
     )
     assert "🌅 3am job: 2026-05-14" in summary
     assert "✅ flush_day за 2026-05-13: записал (abcdef1)" in summary
     assert "✅ update_habits за 2026-05-13: отметил 2 привычки (1234567)" in summary
     assert "   • 📚 Anki" in summary
     assert "   • 🌅 Skincare AM" in summary
-    assert "⏭ flush_week: не понедельник, пропущено" in summary
+    # No mention of flush_week anywhere — weekly flow is gone
+    assert "flush_week" not in summary
 
 
 def test_summary_flush_day_skipped():
@@ -35,7 +32,6 @@ def test_summary_flush_day_skipped():
         target=WEDNESDAY,
         flush_day_outcome=None,
         update_habits_outcome=UpdateHabitsResult(sha=None, marked=[], skip_reason="no_completions"),
-        flush_week_outcome=None,
     )
     assert "⏭ flush_day за 2026-05-13: пропущено" in summary
     assert "⏭ update_habits за 2026-05-13: Todoist не вернул завершённых задач" in summary
@@ -47,7 +43,6 @@ def test_summary_update_habits_no_daily_file():
         target=WEDNESDAY,
         flush_day_outcome="abc",
         update_habits_outcome=UpdateHabitsResult(sha=None, marked=[], skip_reason="no_daily_file"),
-        flush_week_outcome=None,
     )
     assert "⏭ update_habits за 2026-05-13: нет daily-файла в репо" in summary
 
@@ -58,7 +53,6 @@ def test_summary_update_habits_no_op():
         target=WEDNESDAY,
         flush_day_outcome="abc",
         update_habits_outcome=UpdateHabitsResult(sha=None, marked=[], skip_reason="no_op"),
-        flush_week_outcome=None,
     )
     assert "⏭ update_habits за 2026-05-13: нечего менять (всё уже отмечено)" in summary
 
@@ -69,7 +63,6 @@ def test_summary_flush_day_error_includes_exception():
         target=WEDNESDAY,
         flush_day_outcome=RuntimeError("github 404"),
         update_habits_outcome=UpdateHabitsResult(sha=None, marked=[]),
-        flush_week_outcome=None,
     )
     assert "⚠️ flush_day за 2026-05-13: ошибка — RuntimeError: github 404" in summary
 
@@ -80,33 +73,8 @@ def test_summary_update_habits_error_includes_exception():
         target=WEDNESDAY,
         flush_day_outcome="abc1234",
         update_habits_outcome=ValueError("todoist down"),
-        flush_week_outcome=None,
     )
     assert "⚠️ update_habits за 2026-05-13: ошибка — ValueError: todoist down" in summary
-
-
-def test_summary_monday_includes_week_id_when_flushed():
-    summary = build_3am_summary(
-        today=MONDAY,
-        target=SUNDAY,
-        flush_day_outcome="abc1234567",
-        update_habits_outcome=UpdateHabitsResult(sha=None, marked=[]),
-        flush_week_outcome=FlushWeekResult(sha="def9876543", user_message=""),
-    )
-    assert (
-        "✅ flush_week 2026-W20: weekly+nutrition+thoughts+next-week записаны (def9876)" in summary
-    )
-
-
-def test_summary_monday_flush_week_already_done():
-    summary = build_3am_summary(
-        today=MONDAY,
-        target=SUNDAY,
-        flush_day_outcome=None,
-        update_habits_outcome=UpdateHabitsResult(sha=None, marked=[]),
-        flush_week_outcome=None,
-    )
-    assert "⏭ flush_week 2026-W20: уже записано" in summary
 
 
 def test_summary_truncates_long_habit_list():
@@ -116,7 +84,6 @@ def test_summary_truncates_long_habit_list():
         target=WEDNESDAY,
         flush_day_outcome="abc1234",
         update_habits_outcome=UpdateHabitsResult(sha="def4567", marked=many),
-        flush_week_outcome=None,
     )
     assert "отметил 20 привычек" in summary
     assert "   • привычка 0" in summary
@@ -131,7 +98,6 @@ def test_summary_habit_pluralization_singular():
         target=WEDNESDAY,
         flush_day_outcome="x",
         update_habits_outcome=UpdateHabitsResult(sha="y", marked=["один"]),
-        flush_week_outcome=None,
     )
     assert "отметил 1 привычку" in summary
 
@@ -142,7 +108,6 @@ def test_summary_habit_pluralization_five():
         target=WEDNESDAY,
         flush_day_outcome="x",
         update_habits_outcome=UpdateHabitsResult(sha="y", marked=["a", "b", "c", "d", "e"]),
-        flush_week_outcome=None,
     )
     assert "отметил 5 привычек" in summary
 
@@ -230,7 +195,6 @@ def test_summary_omits_reschedule_section_when_outcome_none():
         target=WEDNESDAY,
         flush_day_outcome="abc1234",
         update_habits_outcome=UpdateHabitsResult(sha=None, marked=[]),
-        flush_week_outcome=None,
     )
     assert "pull-back" not in summary
     assert "push-forward" not in summary
@@ -247,7 +211,6 @@ def test_summary_omits_reschedule_lines_when_nothing_happened():
         target=WEDNESDAY,
         flush_day_outcome="abc1234",
         update_habits_outcome=UpdateHabitsResult(sha=None, marked=[]),
-        flush_week_outcome=None,
         reschedule_outcome=result,
     )
     assert "pull-back" not in summary
@@ -267,7 +230,6 @@ def test_summary_shows_pull_back_list():
         target=WEDNESDAY,
         flush_day_outcome="abc",
         update_habits_outcome=UpdateHabitsResult(sha=None, marked=[]),
-        flush_week_outcome=None,
         reschedule_outcome=result,
     )
     assert "⏪ pull-back: 2 задач(и)" in summary
@@ -287,7 +249,6 @@ def test_summary_shows_push_forward_list():
         target=WEDNESDAY,
         flush_day_outcome="abc",
         update_habits_outcome=UpdateHabitsResult(sha=None, marked=[]),
-        flush_week_outcome=None,
         reschedule_outcome=result,
     )
     assert "⏩ push-forward: 1 задач(и)" in summary
@@ -303,7 +264,6 @@ def test_summary_shows_skipped_unparseable_recurrence():
         target=WEDNESDAY,
         flush_day_outcome="abc",
         update_habits_outcome=UpdateHabitsResult(sha=None, marked=[]),
-        flush_week_outcome=None,
         reschedule_outcome=result,
     )
     assert "1 просроченных пропущено" in summary
@@ -316,7 +276,6 @@ def test_summary_shows_reschedule_exception():
         target=WEDNESDAY,
         flush_day_outcome="abc",
         update_habits_outcome=UpdateHabitsResult(sha=None, marked=[]),
-        flush_week_outcome=None,
         reschedule_outcome=RuntimeError("Todoist 500"),
     )
     assert "⚠️ reschedule: ошибка — RuntimeError: Todoist 500" in summary
