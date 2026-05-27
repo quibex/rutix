@@ -34,9 +34,7 @@ class TrackStates(StatesGroup):
     sleep = State()
     meds = State()
     vpn = State()
-    vpn_input = State()
     english = State()
-    english_input = State()
     weight = State()
 
 
@@ -104,9 +102,8 @@ def _hours_keyboard(prefix: str) -> InlineKeyboardMarkup:
             ("0.5", f"{prefix}:0.5"),
             ("1", f"{prefix}:1"),
             ("2", f"{prefix}:2"),
-            ("✏️ ввести", f"{prefix}:input"),
         ],
-        cols=5,
+        cols=4,
     )
 
 
@@ -281,18 +278,12 @@ async def cb_vpn(
     session_factory: async_sessionmaker[AsyncSession],
 ):
     payload = cb.data.split(":", 1)[1]
-    if payload == "input":
-        await state.set_state(TrackStates.vpn_input)
-        await cb.message.edit_text(
-            "VPN — сколько часов? Напишите числом (например, 1.5, 2ч, полтора)."
-        )
-    else:
-        await state.update_data(vpn_hours=float(payload))
-        await _ask_english(cb.message, state)
+    await state.update_data(vpn_hours=float(payload))
+    await _ask_english(cb.message, state)
     await cb.answer()
 
 
-@router.message(TrackStates.vpn_input, F.text)
+@router.message(TrackStates.vpn, F.text)
 async def msg_vpn_input(
     message: Message,
     state: FSMContext,
@@ -313,18 +304,12 @@ async def cb_english(
     session_factory: async_sessionmaker[AsyncSession],
 ):
     payload = cb.data.split(":", 1)[1]
-    if payload == "input":
-        await state.set_state(TrackStates.english_input)
-        await cb.message.edit_text(
-            "English — сколько часов? Напишите числом (например, 1.5, 2ч, полтора)."
-        )
-    else:
-        await state.update_data(eng_hours=float(payload))
-        await _maybe_ask_weight_or_save(cb.message, state, session_factory)
+    await state.update_data(eng_hours=float(payload))
+    await _maybe_ask_weight_or_save(cb.message, state, session_factory)
     await cb.answer()
 
 
-@router.message(TrackStates.english_input, F.text)
+@router.message(TrackStates.english, F.text)
 async def msg_english_input(
     message: Message,
     state: FSMContext,

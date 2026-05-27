@@ -10,6 +10,7 @@ from rutix.bot.handlers.track import (
     msg_english_input,
     msg_vpn_input,
 )
+
 from rutix.db.models import MoodEntry
 
 
@@ -102,18 +103,6 @@ async def test_cb_vpn_half_hour(session):
     assert data["vpn_hours"] == 0.5
 
 
-async def test_cb_vpn_input_prompts_for_text(session):
-    state, data, state_holder = _make_state()
-    cb = _make_cb("vpn:input")
-
-    await cb_vpn(cb, state=state, session_factory=_session_factory(session))
-
-    assert state_holder["value"] is TrackStates.vpn_input
-    assert "vpn_hours" not in data
-    args, _ = cb.message.edit_text.call_args
-    assert "Напишите" in args[0]
-
-
 # --- VPN text input ---
 
 
@@ -165,16 +154,6 @@ async def test_cb_english_numeric_saves_and_finishes_on_weekday(session):
     assert saved is not None
     assert saved.vpn_hours == 1.0
     assert saved.eng_hours == 1.0
-
-
-async def test_cb_english_input_prompts_for_text(session):
-    state, data, state_holder = _make_state(vpn_hours=2.0)
-    cb = _make_cb("eng:input")
-
-    await cb_english(cb, state=state, session_factory=_session_factory(session))
-
-    assert state_holder["value"] is TrackStates.english_input
-    assert "eng_hours" not in data
 
 
 # --- English text input ---
