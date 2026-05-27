@@ -68,17 +68,21 @@ def _0_to_3(prefix: str) -> InlineKeyboardMarkup:
     return _kb_grid([(str(i), f"{prefix}:{i}") for i in range(4)], cols=4)
 
 
-def _energy_keyboard() -> InlineKeyboardMarkup:
+def _energy_keyboard_generic(prefix: str = "energy") -> InlineKeyboardMarkup:
     return _kb_grid(
         [
-            ("-2", "energy:-2"),
-            ("-1", "energy:-1"),
-            ("0", "energy:0"),
-            ("+1", "energy:1"),
-            ("+2", "energy:2"),
+            ("-2", f"{prefix}:-2"),
+            ("-1", f"{prefix}:-1"),
+            ("0", f"{prefix}:0"),
+            ("+1", f"{prefix}:1"),
+            ("+2", f"{prefix}:2"),
         ],
         cols=5,
     )
+
+
+def _energy_keyboard() -> InlineKeyboardMarkup:
+    return _energy_keyboard_generic("energy")
 
 
 def _sleep_keyboard() -> InlineKeyboardMarkup:
@@ -168,7 +172,7 @@ async def cb_energy(cb: CallbackQuery, state: FSMContext):
     await state.set_state(TrackStates.appetite)
     await cb.message.edit_text(
         f"Энергия: {value:+d}.\n\nКакой был аппетит?",
-        reply_markup=_0_to_3("appetite"),
+        reply_markup=_energy_keyboard_generic("appetite"),
     )
     await cb.answer()
 
@@ -179,7 +183,7 @@ async def cb_appetite(cb: CallbackQuery, state: FSMContext):
     await state.update_data(appetite=value)
     await state.set_state(TrackStates.sleep)
     await cb.message.edit_text(
-        f"Аппетит: {value}.\n\nСколько часов спали?",
+        f"Аппетит: {value:+d}.\n\nСколько часов спали?",
         reply_markup=_sleep_keyboard(),
     )
     await cb.answer()
@@ -439,7 +443,7 @@ async def _save_and_finish(
         f"тревога {data.get('anxiety', '?')}, "
         f"раздр. {data.get('irritability', '?')}, "
         f"энергия {data.get('energy', '?'):+d}, "
-        f"аппетит {data.get('appetite', '?')}, "
+        f"аппетит {data.get('appetite', '?'):+d}, "
         f"сон {data.get('sleep_hours', '?')}ч, "
         f"VPN {_fmt_hours(data.get('vpn_hours'))}ч, "
         f"English {_fmt_hours(data.get('eng_hours'))}ч"

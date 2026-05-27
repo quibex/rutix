@@ -374,7 +374,7 @@ def render_wellbeing_section(data: WellbeingData) -> str:
         f"- Настроение: {_signed_or_dash(data.mood)}",
         f"- Тревога: {_int_or_dash(data.anxiety)}",
         f"- Раздражительность: {_int_or_dash(data.irritability)}",
-        f"- Аппетит: {_int_or_dash(data.appetite)}",
+        f"- Аппетит: {_signed_or_dash(data.appetite)}",
         f"- Сон (ч): {_float_or_dash(data.sleep_hours)}",
     ]
     if data.include_weight:
