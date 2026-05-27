@@ -31,6 +31,7 @@ class TrackStates(StatesGroup):
     anxiety = State()
     irritability = State()
     energy = State()
+    appetite = State()
     sleep = State()
     meds = State()
     vpn = State()
@@ -164,9 +165,21 @@ async def cb_irritability(cb: CallbackQuery, state: FSMContext):
 async def cb_energy(cb: CallbackQuery, state: FSMContext):
     value = int(cb.data.split(":", 1)[1])
     await state.update_data(energy=value)
+    await state.set_state(TrackStates.appetite)
+    await cb.message.edit_text(
+        f"Энергия: {value:+d}.\n\nКакой был аппетит?",
+        reply_markup=_0_to_3("appetite"),
+    )
+    await cb.answer()
+
+
+@router.callback_query(TrackStates.appetite, F.data.startswith("appetite:"))
+async def cb_appetite(cb: CallbackQuery, state: FSMContext):
+    value = int(cb.data.split(":", 1)[1])
+    await state.update_data(appetite=value)
     await state.set_state(TrackStates.sleep)
     await cb.message.edit_text(
-        f"Энергия: {value:+d}.\n\nСколько часов спали?",
+        f"Аппетит: {value}.\n\nСколько часов спали?",
         reply_markup=_sleep_keyboard(),
     )
     await cb.answer()
@@ -385,6 +398,7 @@ async def _save_and_finish(
             existing.anxiety = data.get("anxiety")
             existing.irritability = data.get("irritability")
             existing.energy = data.get("energy")
+            existing.appetite = data.get("appetite")
             existing.sleep_hours = data.get("sleep_hours")
             existing.vpn_hours = data.get("vpn_hours")
             existing.eng_hours = data.get("eng_hours")
@@ -398,6 +412,7 @@ async def _save_and_finish(
                     anxiety=data.get("anxiety"),
                     irritability=data.get("irritability"),
                     energy=data.get("energy"),
+                    appetite=data.get("appetite"),
                     sleep_hours=data.get("sleep_hours"),
                     vpn_hours=data.get("vpn_hours"),
                     eng_hours=data.get("eng_hours"),
@@ -424,6 +439,7 @@ async def _save_and_finish(
         f"тревога {data.get('anxiety', '?')}, "
         f"раздр. {data.get('irritability', '?')}, "
         f"энергия {data.get('energy', '?'):+d}, "
+        f"аппетит {data.get('appetite', '?')}, "
         f"сон {data.get('sleep_hours', '?')}ч, "
         f"VPN {_fmt_hours(data.get('vpn_hours'))}ч, "
         f"English {_fmt_hours(data.get('eng_hours'))}ч"

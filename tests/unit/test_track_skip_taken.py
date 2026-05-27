@@ -42,6 +42,7 @@ def _make_state(day: str = "2026-05-23"):
         "anxiety": 0,
         "irritability": 0,
         "energy": 0,
+        "appetite": 2,
         "sleep_hours": 7.0,
     }
 

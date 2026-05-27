@@ -63,6 +63,7 @@ async def flush_day(
         mood=mood.mood,
         anxiety=mood.anxiety,
         irritability=mood.irritability,
+        appetite=mood.appetite,
         sleep_hours=mood.sleep_hours,
         weight=mood.weight,
         include_weight=is_saturday(day),

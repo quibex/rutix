@@ -25,6 +25,7 @@ class MoodEntry(Base):
     anxiety: Mapped[int | None] = mapped_column(Integer, nullable=True)
     irritability: Mapped[int | None] = mapped_column(Integer, nullable=True)
     energy: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    appetite: Mapped[int | None] = mapped_column(Integer, nullable=True)
     sleep_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
     weight: Mapped[float | None] = mapped_column(Float, nullable=True)
     vpn_hours: Mapped[float | None] = mapped_column(Float, nullable=True)
