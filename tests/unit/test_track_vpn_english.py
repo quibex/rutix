@@ -36,6 +36,7 @@ def _make_state(day: str = "2026-05-13", **overrides):
         "anxiety": 0,
         "irritability": 0,
         "energy": 0,
+        "appetite": 2,
         "sleep_hours": 7.0,
         "meds_taken": [],
         "meds_pending": [],
