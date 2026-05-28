@@ -24,7 +24,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from rutix.db.models import MedActive, MedicationLog
+from rutix.db.models import MedActive, MedicationLog, MedSnooze
 from rutix.time_utils import subjective_today
 
 logger = logging.getLogger(__name__)
@@ -130,6 +130,93 @@ def build_reminder_keyboard(day: date, meds: list[MedActive]) -> InlineKeyboardM
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+async def pending_reminder_meds(session: AsyncSession, day: date) -> list[MedActive]:
+    """Active meds with a reminder_time set that aren't yet taken today.
+
+    Used by the snooze handler to decide whether an incoming number is a snooze
+    request and which meds to defer.
+    """
+    taken_keys = set(
+        (
+            await session.scalars(
+                select(MedicationLog.med_key).where(
+                    MedicationLog.day == day,
+                    MedicationLog.taken.is_(True),
+                )
+            )
+        ).all()
+    )
+    all_active = (
+        await session.scalars(
+            select(MedActive)
+            .where(MedActive.archived_at.is_(None), MedActive.reminder_time.isnot(None))
+            .order_by(MedActive.started_at, MedActive.name)
+        )
+    ).all()
+    return [m for m in all_active if m.key not in taken_keys]
+
+
+async def schedule_snooze(session: AsyncSession, meds: list[MedActive], fire_at: datetime) -> None:
+    med_keys = ",".join(m.key for m in meds)
+    session.add(MedSnooze(fire_at=fire_at, med_keys=med_keys))
+    await session.commit()
+
+
+async def _fire_due_snoozes(
+    session: AsyncSession,
+    bot: Bot,
+    telegram_user_id: int,
+    now: datetime,
+    day: date,
+    tz: str,
+) -> bool:
+    """Send any snooze reminders whose fire_at <= now and delete them. Returns
+    True if at least one was sent."""
+    due = (
+        await session.scalars(
+            select(MedSnooze).where(MedSnooze.fire_at <= now.replace(tzinfo=None))
+        )
+    ).all()
+    if not due:
+        return False
+
+    # Collect all unique med keys from due snoozes, deduplicate while preserving order.
+    seen: set[str] = set()
+    keys: list[str] = []
+    for snooze in due:
+        for k in snooze.med_keys.split(","):
+            k = k.strip()
+            if k and k not in seen:
+                seen.add(k)
+                keys.append(k)
+
+    # Filter to only those still active and untaken.
+    untaken = await untaken_active_meds(session, day)
+    untaken_keys = {m.key for m in untaken}
+    meds_to_send = [m for m in untaken if m.key in keys and m.key in untaken_keys]
+
+    # Delete the fired rows regardless of whether meds remain untaken.
+    for snooze in due:
+        await session.delete(snooze)
+    await session.commit()
+
+    if not meds_to_send:
+        return False
+
+    await bot.send_message(
+        chat_id=telegram_user_id,
+        text=build_reminder_text(meds_to_send),
+        reply_markup=build_reminder_keyboard(day, meds_to_send),
+    )
+    logger.info(
+        "snooze reminder sent at %s — %d meds (%s)",
+        now.strftime("%H:%M"),
+        len(meds_to_send),
+        ", ".join(m.key for m in meds_to_send),
+    )
+    return True
+
+
 async def med_reminder_tick(
     session_factory: async_sessionmaker[AsyncSession],
     bot: Bot,
@@ -140,20 +227,22 @@ async def med_reminder_tick(
     now = datetime.now(ZoneInfo(tz))
     hh_mm = now.strftime("%H:%M")
     day = subjective_today(now, tz)
+    sent = False
     async with session_factory() as session:
         meds = await due_active_meds(session, day, hh_mm)
-    if not meds:
-        return False
-    await bot.send_message(
-        chat_id=telegram_user_id,
-        text=build_reminder_text(meds),
-        reply_markup=build_reminder_keyboard(day, meds),
-    )
-    logger.info(
-        "med_reminder_tick sent for %s at %s — %d due (%s)",
-        day,
-        hh_mm,
-        len(meds),
-        ", ".join(m.key for m in meds),
-    )
-    return True
+        if meds:
+            await bot.send_message(
+                chat_id=telegram_user_id,
+                text=build_reminder_text(meds),
+                reply_markup=build_reminder_keyboard(day, meds),
+            )
+            logger.info(
+                "med_reminder_tick sent for %s at %s — %d due (%s)",
+                day,
+                hh_mm,
+                len(meds),
+                ", ".join(m.key for m in meds),
+            )
+            sent = True
+        snooze_sent = await _fire_due_snoozes(session, bot, telegram_user_id, now, day, tz)
+    return sent or snooze_sent

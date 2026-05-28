@@ -118,6 +118,50 @@ def _fmt_hours(v: float | None) -> str:
     return str(int(v)) if v == int(v) else f"{v:g}"
 
 
+def _parse_score(text: str, lo: int, hi: int) -> int | None:
+    """Parse a typed integer score like "1", "+2", "-3", "0" within [lo, hi].
+
+    Accepts leading +/-, unicode minus/dashes and a trailing ".0". Returns None
+    for non-integers or out-of-range values.
+    """
+    if not text:
+        return None
+    s = text.strip().replace("−", "-").replace("–", "-").replace("—", "-").replace(",", ".")
+    try:
+        f = float(s)
+    except ValueError:
+        return None
+    if f != int(f):
+        return None
+    v = int(f)
+    if not (lo <= v <= hi):
+        return None
+    return v
+
+
+_YES_WORDS = {"да", "ага", "угу", "+", "1", "yes", "y", "принял", "принимал", "выпил", "пил"}
+_NO_WORDS = {"нет", "не", "-", "0", "no", "n", "пропустил", "забыл", "не пил"}
+
+
+def _parse_yesno(text: str) -> bool | None:
+    """Parse a typed yes/no answer for the medication question."""
+    s = (text or "").strip().lower()
+    if s in _YES_WORDS:
+        return True
+    if s in _NO_WORDS:
+        return False
+    return None
+
+
+async def _send(message: Message, text: str, kb: InlineKeyboardMarkup, use_answer: bool):
+    """Send the next prompt — edit the prior message (button flow) or post a
+    fresh one (text-input flow, since you can't edit the user's own message)."""
+    if use_answer:
+        await message.answer(text, reply_markup=kb)
+    else:
+        await message.edit_text(text, reply_markup=kb)
+
+
 @router.message(Command("track"))
 async def cmd_track(message: Message, state: FSMContext, settings: Settings):
     today = subjective_today(datetime.now(ZoneInfo(settings.tz)), settings.tz)
@@ -129,74 +173,73 @@ async def cmd_track(message: Message, state: FSMContext, settings: Settings):
     )
 
 
-@router.callback_query(TrackStates.mood, F.data.startswith("mood:"))
-async def cb_mood(cb: CallbackQuery, state: FSMContext):
-    value = int(cb.data.split(":", 1)[1])
-    await state.update_data(mood=value)
+# --- Step transitions (shared by button callbacks and text input) ----------
+
+
+async def _go_anxiety(message: Message, state: FSMContext, mood: int, *, use_answer=False):
+    await state.update_data(mood=mood)
     await state.set_state(TrackStates.anxiety)
-    await cb.message.edit_text(
-        f"Настроение: {value:+d}.\n\nКакая была тревога?",
-        reply_markup=_0_to_3("anx"),
+    await _send(
+        message,
+        f"Настроение: {mood:+d}.\n\nКакая была тревога?",
+        _0_to_3("anx"),
+        use_answer,
     )
-    await cb.answer()
 
 
-@router.callback_query(TrackStates.anxiety, F.data.startswith("anx:"))
-async def cb_anxiety(cb: CallbackQuery, state: FSMContext):
-    value = int(cb.data.split(":", 1)[1])
-    await state.update_data(anxiety=value)
+async def _go_irritability(message: Message, state: FSMContext, anxiety: int, *, use_answer=False):
+    await state.update_data(anxiety=anxiety)
     await state.set_state(TrackStates.irritability)
-    await cb.message.edit_text(
-        f"Тревога: {value}.\n\nКакая была раздражительность?",
-        reply_markup=_0_to_3("irr"),
+    await _send(
+        message,
+        f"Тревога: {anxiety}.\n\nКакая была раздражительность?",
+        _0_to_3("irr"),
+        use_answer,
     )
-    await cb.answer()
 
 
-@router.callback_query(TrackStates.irritability, F.data.startswith("irr:"))
-async def cb_irritability(cb: CallbackQuery, state: FSMContext):
-    value = int(cb.data.split(":", 1)[1])
-    await state.update_data(irritability=value)
+async def _go_energy(message: Message, state: FSMContext, irritability: int, *, use_answer=False):
+    await state.update_data(irritability=irritability)
     await state.set_state(TrackStates.energy)
-    await cb.message.edit_text(
-        f"Раздражительность: {value}.\n\nСколько было сил/энергии?",
-        reply_markup=_energy_keyboard(),
+    await _send(
+        message,
+        f"Раздражительность: {irritability}.\n\nСколько было сил/энергии?",
+        _energy_keyboard(),
+        use_answer,
     )
-    await cb.answer()
 
 
-@router.callback_query(TrackStates.energy, F.data.startswith("energy:"))
-async def cb_energy(cb: CallbackQuery, state: FSMContext):
-    value = int(cb.data.split(":", 1)[1])
-    await state.update_data(energy=value)
+async def _go_appetite(message: Message, state: FSMContext, energy: int, *, use_answer=False):
+    await state.update_data(energy=energy)
     await state.set_state(TrackStates.appetite)
-    await cb.message.edit_text(
-        f"Энергия: {value:+d}.\n\nКакой был аппетит?",
-        reply_markup=_energy_keyboard_generic("appetite"),
+    await _send(
+        message,
+        f"Энергия: {energy:+d}.\n\nКакой был аппетит?",
+        _energy_keyboard_generic("appetite"),
+        use_answer,
     )
-    await cb.answer()
 
 
-@router.callback_query(TrackStates.appetite, F.data.startswith("appetite:"))
-async def cb_appetite(cb: CallbackQuery, state: FSMContext):
-    value = int(cb.data.split(":", 1)[1])
-    await state.update_data(appetite=value)
+async def _go_sleep(message: Message, state: FSMContext, appetite: int, *, use_answer=False):
+    await state.update_data(appetite=appetite)
     await state.set_state(TrackStates.sleep)
-    await cb.message.edit_text(
-        f"Аппетит: {value:+d}.\n\nСколько часов спали?",
-        reply_markup=_sleep_keyboard(),
+    await _send(
+        message,
+        f"Аппетит: {appetite:+d}.\n\nСколько часов спали?",
+        _sleep_keyboard(),
+        use_answer,
     )
-    await cb.answer()
 
 
-@router.callback_query(TrackStates.sleep, F.data.startswith("sleep:"))
-async def cb_sleep(
-    cb: CallbackQuery,
+async def _go_meds(
+    message: Message,
     state: FSMContext,
-    session_factory: async_sessionmaker[AsyncSession],
+    sleep_hours: float,
+    session_factory,
+    *,
+    use_answer=False,
 ):
-    value = float(cb.data.split(":", 1)[1])
-    await state.update_data(sleep_hours=value)
+    await state.update_data(sleep_hours=sleep_hours)
     await state.set_state(TrackStates.meds)
 
     data = await state.get_data()
@@ -226,26 +269,131 @@ async def cb_sleep(
     await state.update_data(meds_pending=meds_pending, meds_taken=meds_taken)
 
     if meds_pending:
-        await _ask_next_med(cb.message, state, session_factory)
+        await _ask_next_med(message, state, session_factory, use_answer=use_answer)
     else:
-        await _ask_vpn(cb.message, state)
+        await _ask_vpn(message, state, use_answer=use_answer)
+
+
+@router.callback_query(TrackStates.mood, F.data.startswith("mood:"))
+async def cb_mood(cb: CallbackQuery, state: FSMContext):
+    value = int(cb.data.split(":", 1)[1])
+    await _go_anxiety(cb.message, state, value)
     await cb.answer()
 
 
-async def _ask_next_med(message: Message, state: FSMContext, session_factory):
+@router.message(TrackStates.mood, F.text)
+async def msg_mood_input(message: Message, state: FSMContext):
+    value = _parse_score(message.text, -3, 3)
+    if value is None:
+        await message.answer("⚠️ Не понял. Напишите число от −3 до +3 (или нажмите кнопку).")
+        return
+    await _go_anxiety(message, state, value, use_answer=True)
+
+
+@router.callback_query(TrackStates.anxiety, F.data.startswith("anx:"))
+async def cb_anxiety(cb: CallbackQuery, state: FSMContext):
+    value = int(cb.data.split(":", 1)[1])
+    await _go_irritability(cb.message, state, value)
+    await cb.answer()
+
+
+@router.message(TrackStates.anxiety, F.text)
+async def msg_anxiety_input(message: Message, state: FSMContext):
+    value = _parse_score(message.text, 0, 3)
+    if value is None:
+        await message.answer("⚠️ Не понял. Напишите число от 0 до 3 (или нажмите кнопку).")
+        return
+    await _go_irritability(message, state, value, use_answer=True)
+
+
+@router.callback_query(TrackStates.irritability, F.data.startswith("irr:"))
+async def cb_irritability(cb: CallbackQuery, state: FSMContext):
+    value = int(cb.data.split(":", 1)[1])
+    await _go_energy(cb.message, state, value)
+    await cb.answer()
+
+
+@router.message(TrackStates.irritability, F.text)
+async def msg_irritability_input(message: Message, state: FSMContext):
+    value = _parse_score(message.text, 0, 3)
+    if value is None:
+        await message.answer("⚠️ Не понял. Напишите число от 0 до 3 (или нажмите кнопку).")
+        return
+    await _go_energy(message, state, value, use_answer=True)
+
+
+@router.callback_query(TrackStates.energy, F.data.startswith("energy:"))
+async def cb_energy(cb: CallbackQuery, state: FSMContext):
+    value = int(cb.data.split(":", 1)[1])
+    await _go_appetite(cb.message, state, value)
+    await cb.answer()
+
+
+@router.message(TrackStates.energy, F.text)
+async def msg_energy_input(message: Message, state: FSMContext):
+    value = _parse_score(message.text, -2, 2)
+    if value is None:
+        await message.answer("⚠️ Не понял. Напишите число от −2 до +2 (или нажмите кнопку).")
+        return
+    await _go_appetite(message, state, value, use_answer=True)
+
+
+@router.callback_query(TrackStates.appetite, F.data.startswith("appetite:"))
+async def cb_appetite(cb: CallbackQuery, state: FSMContext):
+    value = int(cb.data.split(":", 1)[1])
+    await _go_sleep(cb.message, state, value)
+    await cb.answer()
+
+
+@router.message(TrackStates.appetite, F.text)
+async def msg_appetite_input(message: Message, state: FSMContext):
+    value = _parse_score(message.text, -2, 2)
+    if value is None:
+        await message.answer("⚠️ Не понял. Напишите число от −2 до +2 (или нажмите кнопку).")
+        return
+    await _go_sleep(message, state, value, use_answer=True)
+
+
+@router.callback_query(TrackStates.sleep, F.data.startswith("sleep:"))
+async def cb_sleep(
+    cb: CallbackQuery,
+    state: FSMContext,
+    session_factory: async_sessionmaker[AsyncSession],
+):
+    value = float(cb.data.split(":", 1)[1])
+    await _go_meds(cb.message, state, value, session_factory)
+    await cb.answer()
+
+
+@router.message(TrackStates.sleep, F.text)
+async def msg_sleep_input(
+    message: Message,
+    state: FSMContext,
+    session_factory: async_sessionmaker[AsyncSession],
+):
+    hours = parse_hours_text(message.text)
+    if hours is None:
+        await message.answer("⚠️ Не понял. Напишите число часов (7, 7.5, 8ч).")
+        return
+    await _go_meds(message, state, hours, session_factory, use_answer=True)
+
+
+async def _ask_next_med(message: Message, state: FSMContext, session_factory, *, use_answer=False):
     data = await state.get_data()
     pending = list(data.get("meds_pending", []))
     if not pending:
-        return await _ask_vpn(message, state)
+        return await _ask_vpn(message, state, use_answer=use_answer)
     next_key = pending[0]
     async with session_factory() as session:
         med = await session.get(MedActive, next_key)
     if med is None:
         await state.update_data(meds_pending=pending[1:])
-        return await _ask_next_med(message, state, session_factory)
-    await message.edit_text(
+        return await _ask_next_med(message, state, session_factory, use_answer=use_answer)
+    await _send(
+        message,
         f"Принимали {med.name} ({med.current_dose} мг)?",
-        reply_markup=_med_keyboard(next_key),
+        _med_keyboard(next_key),
+        use_answer,
     )
 
 
@@ -271,12 +419,39 @@ async def cb_med(
     await cb.answer()
 
 
+@router.message(TrackStates.meds, F.text)
+async def msg_med_input(
+    message: Message,
+    state: FSMContext,
+    session_factory: async_sessionmaker[AsyncSession],
+):
+    data = await state.get_data()
+    pending = list(data.get("meds_pending", []))
+    if not pending:
+        await _ask_vpn(message, state, use_answer=True)
+        return
+    taken = _parse_yesno(message.text)
+    if taken is None:
+        await message.answer("⚠️ Не понял. Ответьте «да» или «нет» (или нажмите кнопку).")
+        return
+    key = pending[0]
+    taken_list = list(data.get("meds_taken", []))
+    taken_list.append({"key": key, "taken": taken})
+    pending = pending[1:]
+    await state.update_data(meds_taken=taken_list, meds_pending=pending)
+
+    if pending:
+        await _ask_next_med(message, state, session_factory, use_answer=True)
+    else:
+        await _ask_vpn(message, state, use_answer=True)
+
+
 # --- VPN / English (free hours via inline buttons + text fallback) ---------
 
 
-async def _ask_vpn(message: Message, state: FSMContext):
+async def _ask_vpn(message: Message, state: FSMContext, *, use_answer: bool = False):
     await state.set_state(TrackStates.vpn)
-    await message.edit_text("VPN сегодня (ч)?", reply_markup=_hours_keyboard("vpn"))
+    await _send(message, "VPN сегодня (ч)?", _hours_keyboard("vpn"), use_answer)
 
 
 async def _ask_english(message: Message, state: FSMContext, *, use_answer: bool = False):

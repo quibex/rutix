@@ -60,6 +60,16 @@ class MedActive(Base):
     reminder_time: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
+class MedSnooze(Base):
+    """Deferred med reminder: fire_at is UTC datetime, med_keys is comma-separated."""
+
+    __tablename__ = "med_snooze"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    fire_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    med_keys: Mapped[str] = mapped_column(String, nullable=False)
+
+
 class FlushLog(Base):
     __tablename__ = "flush_log"
 
