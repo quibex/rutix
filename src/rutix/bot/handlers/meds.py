@@ -1,7 +1,8 @@
 """/meds — list / add (name+dose) / archive / change-dose for active medication protocol."""
 
 import logging
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
@@ -24,9 +25,12 @@ from rutix.jobs.med_reminder import (
     build_reminder_keyboard,
     build_reminder_text,
     parse_reminder_time,
+    pending_reminder_meds,
+    schedule_snooze,
     untaken_active_meds,
 )
 from rutix.settings import Settings
+from rutix.time_utils import subjective_today
 
 logger = logging.getLogger(__name__)
 
@@ -444,3 +448,52 @@ async def cb_med_taken(
             reply_markup=build_reminder_keyboard(day, remaining),
         )
     await cb.answer(f"✓ {med.name}")
+
+
+# --- Snooze: type a number of minutes to defer the reminder ----------------
+
+_SNOOZE_RE = re.compile(r"^\s*(\d{1,3})\s*$")
+
+_MAX_SNOOZE_MINUTES = 480
+
+
+@router.message(F.text.regexp(r"^\s*\d{1,3}\s*$"))
+async def msg_snooze_minutes(
+    message: Message,
+    state: FSMContext,
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+):
+    """If the user types a plain integer while no other flow is active, treat it
+    as a snooze request for any pending med reminders (active meds with a
+    reminder_time that aren't taken today). Schedules a one-shot re-send via
+    the MedSnooze table, which med_reminder_tick picks up each minute."""
+    current_state = await state.get_state()
+    if current_state is not None:
+        return  # don't steal input from active /track, /meds, /eat flows
+
+    m = _SNOOZE_RE.match(message.text)
+    if m is None:
+        return
+    minutes = int(m.group(1))
+    if not 1 <= minutes <= _MAX_SNOOZE_MINUTES:
+        return
+
+    now = datetime.now(ZoneInfo(settings.tz))
+    day = subjective_today(now, settings.tz)
+    async with session_factory() as session:
+        meds = await pending_reminder_meds(session, day)
+        if not meds:
+            return  # no active reminder pending — ignore the number silently
+        fire_at = now + timedelta(minutes=minutes)
+        await schedule_snooze(session, meds, fire_at)
+
+    if minutes < 60:
+        when = f"{minutes} мин"
+    elif minutes % 60 == 0:
+        when = f"{minutes // 60} ч"
+    else:
+        when = f"{minutes // 60} ч {minutes % 60} мин"
+    fire_local = (now + timedelta(minutes=minutes)).strftime("%H:%M")
+    names = ", ".join(m.name for m in meds)
+    await message.answer(f"⏰ Напомню про {names} через {when} (в {fire_local}).")
