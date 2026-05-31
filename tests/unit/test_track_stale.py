@@ -51,9 +51,7 @@ class FakeSettings:
 async def test_stale_filter_matches_old_day():
     # Weight step left over from a long-past /track session.
     state = FakeState(data={"day": "2020-01-01"}, state=TrackStates.weight)
-    matched = await track_handler._StaleTrackFilter()(
-        FakeMessage("60"), state, FakeSettings()
-    )
+    matched = await track_handler._StaleTrackFilter()(FakeMessage("60"), state, FakeSettings())
     assert matched is True
 
 
@@ -61,18 +59,14 @@ async def test_stale_filter_matches_old_day():
 async def test_stale_filter_ignores_current_day():
     # A session for a future day is never stale.
     state = FakeState(data={"day": "2999-01-01"}, state=TrackStates.weight)
-    matched = await track_handler._StaleTrackFilter()(
-        FakeMessage("60"), state, FakeSettings()
-    )
+    matched = await track_handler._StaleTrackFilter()(FakeMessage("60"), state, FakeSettings())
     assert matched is False
 
 
 @pytest.mark.asyncio
 async def test_stale_filter_ignores_no_state():
     state = FakeState(data={}, state=None)
-    matched = await track_handler._StaleTrackFilter()(
-        FakeMessage("60"), state, FakeSettings()
-    )
+    matched = await track_handler._StaleTrackFilter()(FakeMessage("60"), state, FakeSettings())
     assert matched is False
 
 
