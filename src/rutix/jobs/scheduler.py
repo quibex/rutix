@@ -112,12 +112,6 @@ def _fmt_reschedule_lines(result: "RescheduleResult | Exception") -> list[str]:
             lines.append(f"   • {c}")
         if len(result.pushed_forward) > _MAX_LISTED_RESCHEDULES:
             lines.append(f"   … и ещё {len(result.pushed_forward) - _MAX_LISTED_RESCHEDULES}")
-    if result.skipped:
-        lines.append(
-            f"⏭ reschedule: {len(result.skipped)} просроченных пропущено (recurrence не понятен)"
-        )
-        for c in result.skipped[:_MAX_LISTED_RESCHEDULES]:
-            lines.append(f"   • {c}")
     if result.errors:
         lines.append(f"⚠️ reschedule: {len(result.errors)} ошибок")
         for msg in result.errors[:_MAX_LISTED_RESCHEDULES]:

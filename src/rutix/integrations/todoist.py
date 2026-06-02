@@ -13,7 +13,9 @@ The endpoint `/api/v1/activities` filters via `object_event_types=["item:complet
 """
 
 import asyncio
+import json
 import logging
+import uuid
 from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -54,12 +56,13 @@ class TodoistClient:
         *,
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
     ) -> httpx.Response:
         """HTTP request with exponential backoff on 5xx. 4xx returns the response
         unretried — the caller decides what to do with it."""
         last_exc: httpx.HTTPStatusError | None = None
         for attempt in range(self.retry_5xx_attempts):
-            r = await self.http.request(method, url, params=params, json=json)
+            r = await self.http.request(method, url, params=params, json=json, data=data)
             if r.status_code < 500:
                 return r
             try:
@@ -214,16 +217,64 @@ class TodoistClient:
                 break
         return out
 
-    async def update_task_due_date(self, task_id: str, new_date: date) -> None:
-        """POST /api/v1/tasks/{id} with due_date only — preserves due_string
-        (so a recurring task keeps its cadence; the next completion recomputes
-        from the new anchor)."""
+    async def update_task_due_date(
+        self, task_id: str, new_date: date, *, due: dict[str, Any] | None = None
+    ) -> None:
+        """Move a task's due date to ``new_date``.
+
+        For a **recurring** task we must go through the Sync API's ``item_update``
+        with a full ``due`` object — copying the existing recurrence ``string`` /
+        ``is_recurring`` and only swapping the anchor date. The flat REST
+        ``due_date`` field on ``POST /api/v1/tasks/{id}`` *silently drops* the
+        recurrence (the task turns into a one-shot and vanishes on the next
+        completion), which is wrong for a habit. This mirrors what the Todoist UI's
+        "reschedule" does: only the date moves, the cadence stays.
+
+        Non-recurring tasks take the simple REST path — there's no recurrence to
+        preserve, so ``due_date`` is correct.
+        """
+        if due and due.get("is_recurring"):
+            await self._reschedule_recurring(task_id, new_date, due)
+            return
         r = await self._request_with_retry(
             "POST",
             f"/api/v1/tasks/{task_id}",
             json={"due_date": new_date.isoformat()},
         )
         r.raise_for_status()
+
+    async def _reschedule_recurring(
+        self, task_id: str, new_date: date, due: dict[str, Any]
+    ) -> None:
+        """Re-anchor a recurring task to ``new_date`` while keeping its cadence,
+        via the Sync API ``item_update`` command. We resend the existing ``due``
+        fields and replace only the calendar date (keeping any time-of-day /
+        timezone suffix so a timed recurrence doesn't silently become all-day).
+
+        The command ``uuid`` is generated once and reused across 5xx retries, so a
+        retried request is deduped by Todoist rather than applied twice.
+        """
+        old = due.get("date") or ""
+        # Keep a "T09:00:00[.ffffff][Z]" suffix if the original due was timed.
+        date_str = new_date.isoformat() + old[10:] if "T" in old else new_date.isoformat()
+        new_due: dict[str, Any] = {"date": date_str, "is_recurring": True}
+        for key in ("string", "lang", "timezone"):
+            if due.get(key) is not None:
+                new_due[key] = due[key]
+        command = {
+            "type": "item_update",
+            "uuid": str(uuid.uuid4()),
+            "args": {"id": task_id, "due": new_due},
+        }
+        r = await self._request_with_retry(
+            "POST",
+            "/api/v1/sync",
+            data={"commands": json.dumps([command])},
+        )
+        r.raise_for_status()
+        status = r.json().get("sync_status", {}).get(command["uuid"])
+        if status != "ok":
+            raise RuntimeError(f"Todoist item_update failed for {task_id}: {status!r}")
 
     async def aclose(self) -> None:
         await self.http.aclose()

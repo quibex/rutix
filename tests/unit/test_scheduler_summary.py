@@ -133,9 +133,7 @@ def test_retry_summary_appended_done_only_notifies():
     """Even if no habits matched, new bullets in `## Что сделано` count as a change."""
     msg = build_retry_summary(
         target=WEDNESDAY,
-        result=UpdateHabitsResult(
-            sha="abc1234", marked=[], appended_done=["купить хлеб"]
-        ),
+        result=UpdateHabitsResult(sha="abc1234", marked=[], appended_done=["купить хлеб"]),
         is_final_attempt=False,
     )
     assert msg is not None
@@ -203,9 +201,7 @@ def test_summary_omits_reschedule_section_when_outcome_none():
 
 def test_summary_omits_reschedule_lines_when_nothing_happened():
     """No pulls, no pushes, no errors → silent. Don't show '⏪ 0 / ⏩ 0'."""
-    result = RescheduleResult(
-        pulled_back=[], pushed_forward=[], skipped=[], errors=[]
-    )
+    result = RescheduleResult(pulled_back=[], pushed_forward=[], errors=[])
     summary = build_3am_summary(
         today=THURSDAY,
         target=WEDNESDAY,
@@ -222,7 +218,6 @@ def test_summary_shows_pull_back_list():
     result = RescheduleResult(
         pulled_back=["Anki", "Skincare PM"],
         pushed_forward=[],
-        skipped=[],
         errors=[],
     )
     summary = build_3am_summary(
@@ -241,7 +236,6 @@ def test_summary_shows_push_forward_list():
     result = RescheduleResult(
         pulled_back=[],
         pushed_forward=["Купить хлеб"],
-        skipped=[],
         errors=[],
     )
     summary = build_3am_summary(
@@ -253,21 +247,6 @@ def test_summary_shows_push_forward_list():
     )
     assert "⏩ push-forward: 1 задач(и)" in summary
     assert "• Купить хлеб" in summary
-
-
-def test_summary_shows_skipped_unparseable_recurrence():
-    result = RescheduleResult(
-        pulled_back=[], pushed_forward=[], skipped=["Стрижка"], errors=[]
-    )
-    summary = build_3am_summary(
-        today=THURSDAY,
-        target=WEDNESDAY,
-        flush_day_outcome="abc",
-        update_habits_outcome=UpdateHabitsResult(sha=None, marked=[]),
-        reschedule_outcome=result,
-    )
-    assert "1 просроченных пропущено" in summary
-    assert "• Стрижка" in summary
 
 
 def test_summary_shows_reschedule_exception():

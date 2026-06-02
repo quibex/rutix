@@ -288,15 +288,14 @@ async def test_fetch_task_returns_task_dict(client):
 
 @respx.mock
 async def test_fetch_task_returns_none_on_404(client):
-    respx.get("https://api.todoist.com/api/v1/tasks/missing").mock(
-        return_value=httpx.Response(404)
-    )
+    respx.get("https://api.todoist.com/api/v1/tasks/missing").mock(return_value=httpx.Response(404))
     assert await client.fetch_task("missing") is None
     await client.aclose()
 
 
 @respx.mock
-async def test_update_task_due_date_posts_yyyy_mm_dd(client):
+async def test_update_task_due_date_non_recurring_posts_yyyy_mm_dd(client):
+    """Non-recurring task → simple REST due_date update (no recurrence to keep)."""
     route = respx.post("https://api.todoist.com/api/v1/tasks/abc123").mock(
         return_value=httpx.Response(200, json={"id": "abc123"})
     )
@@ -306,6 +305,78 @@ async def test_update_task_due_date_posts_yyyy_mm_dd(client):
 
     body = json.loads(route.calls[0].request.content)
     assert body == {"due_date": "2026-05-24"}
+    await client.aclose()
+
+
+def _sync_echo_ok(request):
+    """Echo the command uuid back as 'ok' — mirrors the Sync API contract."""
+    import json
+    from urllib.parse import parse_qs
+
+    commands = json.loads(parse_qs(request.content.decode())["commands"][0])
+    return httpx.Response(200, json={"sync_status": {commands[0]["uuid"]: "ok"}})
+
+
+@respx.mock
+async def test_update_task_due_date_recurring_uses_sync_item_update(client):
+    """Recurring task → Sync API item_update with a full `due` object so the
+    cadence (`string` + `is_recurring`) survives and only the date moves."""
+    import json
+
+    rest = respx.post("https://api.todoist.com/api/v1/tasks/abc123").mock(
+        return_value=httpx.Response(200, json={"id": "abc123"})
+    )
+    sync = respx.post("https://api.todoist.com/api/v1/sync").mock(side_effect=_sync_echo_ok)
+
+    due = {"date": "2026-05-20", "string": "every day", "is_recurring": True, "lang": "en"}
+    await client.update_task_due_date("abc123", date(2026, 5, 24), due=due)
+
+    assert not rest.called  # must NOT hit the recurrence-destroying REST path
+    assert sync.called
+    from urllib.parse import parse_qs
+
+    commands = json.loads(parse_qs(sync.calls[0].request.content.decode())["commands"][0])
+    assert len(commands) == 1
+    cmd = commands[0]
+    assert cmd["type"] == "item_update"
+    assert cmd["uuid"]
+    assert cmd["args"]["id"] == "abc123"
+    assert cmd["args"]["due"] == {
+        "date": "2026-05-24",
+        "is_recurring": True,
+        "string": "every day",
+        "lang": "en",
+    }
+    await client.aclose()
+
+
+@respx.mock
+async def test_update_task_due_date_recurring_preserves_time_of_day(client):
+    """A timed recurrence keeps its T-suffix — only the calendar date swaps."""
+    import json
+    from urllib.parse import parse_qs
+
+    respx.post("https://api.todoist.com/api/v1/sync").mock(side_effect=_sync_echo_ok)
+    due = {"date": "2026-05-20T09:00:00", "string": "every day at 9", "is_recurring": True}
+    await client.update_task_due_date("abc123", date(2026, 5, 24), due=due)
+
+    commands = json.loads(parse_qs(respx.calls[0].request.content.decode())["commands"][0])
+    assert commands[0]["args"]["due"]["date"] == "2026-05-24T09:00:00"
+    await client.aclose()
+
+
+@respx.mock
+async def test_update_task_due_date_recurring_raises_on_sync_error(client):
+    """A non-'ok' sync_status must raise so the cron surfaces the failure."""
+    respx.post("https://api.todoist.com/api/v1/sync").mock(
+        return_value=httpx.Response(200, json={"sync_status": {"whatever": {"error": "boom"}}})
+    )
+    with pytest.raises(RuntimeError):
+        await client.update_task_due_date(
+            "abc123",
+            date(2026, 5, 24),
+            due={"string": "every day", "is_recurring": True},
+        )
     await client.aclose()
 
 

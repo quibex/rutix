@@ -1,41 +1,11 @@
 from datetime import date
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from rutix.jobs.reschedule_overdue import (
     compute_pull_back_target,
     compute_push_forward_target,
-    parse_recurrence_days,
     reschedule_overdue,
 )
-
-
-# parse_recurrence_days
-
-
-@pytest.mark.parametrize(
-    "due_string,expected",
-    [
-        ("every day", 1),
-        ("Every Day", 1),
-        ("ежедневно", 1),
-        ("каждый день", 1),
-        ("every 2 days", 2),
-        ("every 7 days", 7),
-        ("каждые 3 дня", 3),
-        ("каждые 5 дней", 5),
-        # Unsupported cadences — explicit None so caller knows to skip
-        ("every Monday", None),
-        ("every other week", None),
-        ("monthly on the 1st", None),
-        ("", None),
-        (None, None),
-    ],
-)
-def test_parse_recurrence_days(due_string, expected):
-    assert parse_recurrence_days(due_string) == expected
-
 
 # compute_push_forward_target
 
@@ -53,9 +23,9 @@ def _task(due_date=None, due_string=None, is_recurring=False, content="t"):
     return {"id": "1", "content": content, "due": due}
 
 
-def test_push_forward_non_recurring_overdue_moves_to_tomorrow():
+def test_push_forward_non_recurring_overdue_moves_to_today():
     t = _task(due_date="2026-05-22", is_recurring=False)
-    assert compute_push_forward_target(t, TODAY) == date(2026, 5, 25)
+    assert compute_push_forward_target(t, TODAY) == TODAY
 
 
 def test_push_forward_non_overdue_returns_none():
@@ -64,26 +34,22 @@ def test_push_forward_non_overdue_returns_none():
     assert compute_push_forward_target(_task(due_date="2026-06-01"), TODAY) is None
 
 
-def test_push_forward_daily_recurring_moves_to_tomorrow():
+def test_push_forward_daily_recurring_moves_to_today():
     t = _task(due_date="2026-05-22", due_string="every day", is_recurring=True)
-    assert compute_push_forward_target(t, TODAY) == date(2026, 5, 25)
+    assert compute_push_forward_target(t, TODAY) == TODAY
 
 
-def test_push_forward_every_2_days_moves_to_today_plus_2():
-    """User's exact example: 'every 2 days' overdue today should move to +2, not +1."""
+def test_push_forward_every_2_days_recurring_moves_to_today():
+    """Overdue recurring tasks of any cadence roll to today — recurrence is kept
+    by the write path, so the cadence survives the move."""
     t = _task(due_date="2026-05-22", due_string="every 2 days", is_recurring=True)
-    assert compute_push_forward_target(t, TODAY) == date(2026, 5, 26)
+    assert compute_push_forward_target(t, TODAY) == TODAY
 
 
-def test_push_forward_every_7_days_moves_to_today_plus_7():
-    t = _task(due_date="2026-05-15", due_string="every 7 days", is_recurring=True)
-    assert compute_push_forward_target(t, TODAY) == date(2026, 5, 31)
-
-
-def test_push_forward_unparseable_recurrence_returns_none():
-    """Weekly / monthly — don't guess. Surface to user as 'skipped' instead."""
+def test_push_forward_weekly_recurrence_also_moves_to_today():
+    """Previously skipped — now moved to today like everything else overdue."""
     t = _task(due_date="2026-05-20", due_string="every Monday", is_recurring=True)
-    assert compute_push_forward_target(t, TODAY) is None
+    assert compute_push_forward_target(t, TODAY) == TODAY
 
 
 def test_push_forward_task_with_no_due_returns_none():
@@ -93,7 +59,7 @@ def test_push_forward_task_with_no_due_returns_none():
 def test_push_forward_handles_timed_due_date():
     """due.date can be 'YYYY-MM-DDTHH:MM:SS' for timed tasks — only the date part matters."""
     t = _task(due_date="2026-05-22T09:00:00", is_recurring=False)
-    assert compute_push_forward_target(t, TODAY) == date(2026, 5, 25)
+    assert compute_push_forward_target(t, TODAY) == TODAY
 
 
 # compute_pull_back_target
@@ -147,7 +113,7 @@ class FakeTodoist:
     async def fetch_active_tasks(self):
         return list(self.tasks.values())
 
-    async def update_task_due_date(self, task_id, new_date):
+    async def update_task_due_date(self, task_id, new_date, *, due=None):
         self.updates.append((task_id, new_date))
         # Reflect the write so subsequent reads see the new state.
         task = self.tasks.get(task_id)
@@ -180,25 +146,33 @@ async def test_reschedule_push_forward_for_overdue_non_recurring():
 
     result = await reschedule_overdue(todoist, TODAY)
 
-    assert ("t1", date(2026, 5, 25)) in todoist.updates
+    assert ("t1", TODAY) in todoist.updates
     assert result.pushed_forward == ["Купить хлеб"]
 
 
-async def test_reschedule_push_forward_every_2_days():
+async def test_reschedule_push_forward_recurring_moves_to_today_with_due():
     todoist = FakeTodoist()
-    todoist.tasks["t1"] = {
-        "id": "t1",
-        "content": "Английский",
-        "due": {"date": "2026-05-22", "string": "every 2 days", "is_recurring": True},
-    }
+    due = {"date": "2026-05-22", "string": "every 2 days", "is_recurring": True}
+    todoist.tasks["t1"] = {"id": "t1", "content": "Английский", "due": due}
+
+    captured: list = []
+    orig = todoist.update_task_due_date
+
+    async def spy(task_id, new_date, *, due=None):
+        captured.append((task_id, new_date, due))
+        await orig(task_id, new_date, due=due)
+
+    todoist.update_task_due_date = spy
 
     result = await reschedule_overdue(todoist, TODAY)
 
-    assert ("t1", date(2026, 5, 26)) in todoist.updates
+    assert ("t1", TODAY) in todoist.updates
     assert result.pushed_forward == ["Английский"]
+    # The write path receives the recurring `due` so it can preserve the cadence.
+    assert captured == [("t1", TODAY, due)]
 
 
-async def test_reschedule_skips_unparseable_recurrence():
+async def test_reschedule_weekly_recurrence_also_moves_to_today():
     todoist = FakeTodoist()
     todoist.tasks["t1"] = {
         "id": "t1",
@@ -208,8 +182,8 @@ async def test_reschedule_skips_unparseable_recurrence():
 
     result = await reschedule_overdue(todoist, TODAY)
 
-    assert todoist.updates == []
-    assert "Стрижка" in result.skipped
+    assert ("t1", TODAY) in todoist.updates
+    assert result.pushed_forward == ["Стрижка"]
 
 
 async def test_reschedule_idempotent_no_writes_when_dates_correct():
