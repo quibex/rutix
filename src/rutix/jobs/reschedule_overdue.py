@@ -12,13 +12,20 @@ Two distinct corrections:
    due_date back by one day.
 
 2) **Push-forward** for anything still overdue at 03:00. The user wants their
-   schedule to always look fresh on entry: anything left over from yesterday or
-   earlier rolls to **today**, so the missed item resurfaces in today's plan.
+   schedule to always look fresh on entry: a missed *one-shot* rolls to
+   **today** so it resurfaces in today's plan.
 
-   Recurrence is preserved by the write path (`TodoistClient.update_task_due_date`
-   re-anchors recurring tasks via the Sync API instead of flattening them into
-   one-shots), so we can move recurring tasks here too — only the anchor date
-   moves, the cadence stays.
+   A missed *recurring* task does NOT roll to today — that would re-anchor the
+   whole series to today and break its phase (skip a "yoga, every 3 days" task
+   once and it would silently shift its Mon/Thu/Sun cadence). Instead it
+   advances to its **next scheduled occurrence** on or after today, computed
+   from the recurrence string by `recurrence.next_occurrence`. Recurrences we
+   can't parse fall back to today (the old behaviour).
+
+   Either way recurrence is preserved by the write path
+   (`TodoistClient.update_task_due_date` re-anchors recurring tasks via the Sync
+   API instead of flattening them into one-shots) — only the anchor date moves,
+   the cadence string stays.
 
 The job is idempotent: updates are only sent when the computed target differs
 from the task's current due.date.
@@ -30,6 +37,7 @@ from typing import NamedTuple
 from zoneinfo import ZoneInfo
 
 from rutix.integrations.todoist import TodoistClient
+from rutix.jobs.recurrence import next_occurrence
 from rutix.time_utils import EARLY_MORNING_BOUNDARY
 
 logger = logging.getLogger(__name__)
@@ -62,17 +70,21 @@ def _parse_due_date(due: dict | None) -> date | None:
 def compute_push_forward_target(task: dict, today: date) -> date | None:
     """Date this overdue task should move to, or None to leave it alone.
 
-    Anything due *before* today (left over from yesterday or earlier) rolls to
-    **today** so it resurfaces in today's plan. Tasks due today or later — and
-    tasks with no due date — are untouched.
+    Tasks due today or later — and tasks with no due date — are untouched.
 
-    Recurring tasks are moved too: the write path re-anchors them via the Sync
-    API and keeps the cadence, so moving an overdue habit to today no longer
-    flattens it into a one-shot.
+    A *one-shot* due before today rolls to **today** so it resurfaces in today's
+    plan. A *recurring* task instead advances to its next scheduled occurrence on
+    or after today (keeping its cadence phase); if the recurrence string can't be
+    parsed we fall back to today. The write path re-anchors recurring tasks via
+    the Sync API, so the cadence string survives the move either way.
     """
-    current = _parse_due_date(task.get("due"))
+    due = task.get("due") or {}
+    current = _parse_due_date(due)
     if current is None or current >= today:
         return None
+    if due.get("is_recurring"):
+        nxt = next_occurrence(due.get("string"), current, today)
+        return nxt if nxt is not None else today
     return today
 
 
