@@ -184,6 +184,20 @@ async def test_msg_english_input_invalid_reprompts(session):
     assert "Не понял" in msg.answer.call_args.args[0]
 
 
+async def test_msg_english_input_rejects_misrouted_snooze(session):
+    # "45" meant a 45-min med-reminder snooze typed while /track still waited on
+    # the English step. It must NOT be recorded as 45 hours of English.
+    state, data, state_holder = _make_state(vpn_hours=1.0)
+    msg = _make_msg("45")
+
+    await msg_english_input(msg, state=state, session_factory=_session_factory(session))
+
+    assert "eng_hours" not in data
+    assert await session.get(MoodEntry, date(2026, 5, 13)) is None
+    msg.answer.assert_awaited()
+    assert "Не понял" in msg.answer.call_args.args[0]
+
+
 # --- Saturday flow continues to weight ---
 
 

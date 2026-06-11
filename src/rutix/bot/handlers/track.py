@@ -483,7 +483,7 @@ async def msg_vpn_input(
 ):
     hours = parse_hours_text(message.text)
     if hours is None:
-        await message.answer("⚠️ Не понял. Попробуйте ещё раз: число часов (1.5, 2ч, полтора).")
+        await message.answer("⚠️ Не понял. Введите число часов за день (0–24): 1.5, 2ч, полтора.")
         return
     await state.update_data(vpn_hours=hours)
     await _ask_english(message, state, use_answer=True)
@@ -509,7 +509,7 @@ async def msg_english_input(
 ):
     hours = parse_hours_text(message.text)
     if hours is None:
-        await message.answer("⚠️ Не понял. Попробуйте ещё раз: число часов (1.5, 2ч, полтора).")
+        await message.answer("⚠️ Не понял. Введите число часов за день (0–24): 1.5, 2ч, полтора.")
         return
     await state.update_data(eng_hours=hours)
     await _maybe_ask_weight_or_save(message, state, session_factory, use_answer=True)
