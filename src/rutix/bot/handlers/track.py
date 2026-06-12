@@ -1,4 +1,14 @@
-"""/track — multi-step mood entry via inline buttons."""
+"""/track — multi-step mood entry via inline buttons.
+
+Each answered step is persisted to the DB immediately (write-through), so an
+interrupted /track keeps everything answered so far. Re-running /track the same
+day resumes from the first unanswered step; a new day starts from scratch.
+
+A standalone bot message (med reminder, evening ping, …) cancels the pending
+step — see `rutix.bot.notify.Notifier` — so a reply meant for that message
+isn't swallowed by a stale /track prompt. Nothing is lost: the resume logic
+rebuilds progress from the persisted values.
+"""
 
 import logging
 from datetime import date, datetime
@@ -162,22 +172,187 @@ async def _send(message: Message, text: str, kb: InlineKeyboardMarkup, use_answe
         await message.edit_text(text, reply_markup=kb)
 
 
+# --- Write-through persistence (one field / one med per answered step) -------
+
+
+async def _persist_fields(session_factory, day: date, **fields) -> None:
+    """Upsert today's MoodEntry, setting just the answered field(s). A value of
+    0 / 0.0 is a real answer — only `None` means "not yet answered", which is
+    what the resume logic keys off."""
+    async with session_factory() as session:
+        entry = await session.get(MoodEntry, day)
+        if entry is None:
+            entry = MoodEntry(day=day)
+            session.add(entry)
+        for key, value in fields.items():
+            setattr(entry, key, value)
+        await session.commit()
+
+
+async def _persist_med(session_factory, day: date, key: str, taken: bool) -> None:
+    """Upsert a per-med MedicationLog row the moment the user answers it."""
+    async with session_factory() as session:
+        log = await session.get(MedicationLog, (day, key))
+        if log is None:
+            session.add(MedicationLog(day=day, med_key=key, taken=taken))
+        else:
+            log.taken = taken
+        await session.commit()
+
+
+# --- Resume: rebuild progress from persisted values --------------------------
+
+
+async def _compute_resume(session_factory, day: date) -> tuple[str | None, dict, MoodEntry | None]:
+    """Inspect today's persisted state and return (step, seed_data, existing).
+
+    `step` is the first unanswered step (or None if the day is fully tracked).
+    `seed_data` pre-fills the FSM with everything already answered so the final
+    summary is complete and the meds step skips meds already logged.
+    `existing` is the MoodEntry row (None ⇒ a fresh day).
+    """
+    async with session_factory() as session:
+        entry = await session.get(MoodEntry, day)
+        meds = (
+            await session.scalars(
+                select(MedActive)
+                .where(MedActive.archived_at.is_(None))
+                .order_by(MedActive.started_at, MedActive.name)
+            )
+        ).all()
+        log_rows = (
+            await session.scalars(select(MedicationLog).where(MedicationLog.day == day))
+        ).all()
+
+    logged = {row.med_key: row.taken for row in log_rows}
+    meds_pending = [m.key for m in meds if m.key not in logged]
+    meds_taken = [{"key": m.key, "taken": logged[m.key]} for m in meds if m.key in logged]
+
+    seed: dict = {"day": day.isoformat(), "meds_taken": meds_taken, "meds_pending": meds_pending}
+    if entry is not None:
+        for field in (
+            "mood",
+            "anxiety",
+            "irritability",
+            "energy",
+            "appetite",
+            "sleep_hours",
+            "vpn_hours",
+            "eng_hours",
+            "weight",
+        ):
+            value = getattr(entry, field)
+            if value is not None:
+                seed[field] = value
+
+    def missing(field: str) -> bool:
+        return entry is None or getattr(entry, field) is None
+
+    if missing("mood"):
+        step: str | None = "mood"
+    elif missing("anxiety"):
+        step = "anxiety"
+    elif missing("irritability"):
+        step = "irritability"
+    elif missing("energy"):
+        step = "energy"
+    elif missing("appetite"):
+        step = "appetite"
+    elif missing("sleep_hours"):
+        step = "sleep"
+    elif meds_pending:
+        step = "meds"
+    elif missing("vpn_hours"):
+        step = "vpn"
+    elif missing("eng_hours"):
+        step = "english"
+    elif is_saturday(day) and missing("weight"):
+        step = "weight"
+    else:
+        step = None
+    return step, seed, entry
+
+
+async def _prompt_step(message: Message, state: FSMContext, step: str, session_factory) -> None:
+    """Post the prompt for a resume step (plain question, no "previous: X" prefix)."""
+    if step == "mood":
+        await state.set_state(TrackStates.mood)
+        await message.answer("Какое было настроение?", reply_markup=_mood_keyboard())
+    elif step == "anxiety":
+        await state.set_state(TrackStates.anxiety)
+        await message.answer("Какая была тревога?", reply_markup=_0_to_3("anx"))
+    elif step == "irritability":
+        await state.set_state(TrackStates.irritability)
+        await message.answer("Какая была раздражительность?", reply_markup=_0_to_3("irr"))
+    elif step == "energy":
+        await state.set_state(TrackStates.energy)
+        await message.answer("Сколько было сил/энергии?", reply_markup=_energy_keyboard())
+    elif step == "appetite":
+        await state.set_state(TrackStates.appetite)
+        await message.answer(
+            "Какой был аппетит?", reply_markup=_energy_keyboard_generic("appetite")
+        )
+    elif step == "sleep":
+        await state.set_state(TrackStates.sleep)
+        await message.answer("Сколько часов спали?", reply_markup=_sleep_keyboard())
+    elif step == "meds":
+        await state.set_state(TrackStates.meds)
+        await _ask_next_med(message, state, session_factory, use_answer=True)
+    elif step == "vpn":
+        await _ask_vpn(message, state, use_answer=True)
+    elif step == "english":
+        await _ask_english(message, state, use_answer=True)
+    elif step == "weight":
+        await state.set_state(TrackStates.weight)
+        await message.answer(
+            "Какой сегодня вес (кг)? Напишите числом или нажмите «Пропустить».",
+            reply_markup=_weight_skip_keyboard(),
+        )
+
+
 @router.message(Command("track"))
-async def cmd_track(message: Message, state: FSMContext, settings: Settings):
+async def cmd_track(
+    message: Message,
+    state: FSMContext,
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+):
     today = subjective_today(datetime.now(ZoneInfo(settings.tz)), settings.tz)
-    await state.update_data(day=today.isoformat(), meds_taken=[], meds_pending=[])
-    await state.set_state(TrackStates.mood)
-    await message.answer(
-        f"📊 Трек за {today.isoformat()}.\n\nКакое было настроение?",
-        reply_markup=_mood_keyboard(),
-    )
+    step, seed, existing = await _compute_resume(session_factory, today)
+
+    await state.clear()
+    await state.update_data(**seed)
+
+    if existing is None:
+        await state.set_state(TrackStates.mood)
+        await message.answer(
+            f"📊 Трек за {today.isoformat()}.\n\nКакое было настроение?",
+            reply_markup=_mood_keyboard(),
+        )
+        return
+
+    if step is None:
+        await state.set_state(TrackStates.mood)
+        await message.answer(
+            f"✅ Трек за {today.isoformat()} уже заполнен. Пройдём заново.\n\n"
+            "Какое было настроение?",
+            reply_markup=_mood_keyboard(),
+        )
+        return
+
+    await message.answer(f"📊 Продолжаем трек за {today.isoformat()}.")
+    await _prompt_step(message, state, step, session_factory)
 
 
 # --- Step transitions (shared by button callbacks and text input) ----------
 
 
-async def _go_anxiety(message: Message, state: FSMContext, mood: int, *, use_answer=False):
+async def _go_anxiety(
+    message: Message, state: FSMContext, mood: int, session_factory, *, use_answer=False
+):
     await state.update_data(mood=mood)
+    data = await state.get_data()
+    await _persist_fields(session_factory, date.fromisoformat(data["day"]), mood=mood)
     await state.set_state(TrackStates.anxiety)
     await _send(
         message,
@@ -187,8 +362,12 @@ async def _go_anxiety(message: Message, state: FSMContext, mood: int, *, use_ans
     )
 
 
-async def _go_irritability(message: Message, state: FSMContext, anxiety: int, *, use_answer=False):
+async def _go_irritability(
+    message: Message, state: FSMContext, anxiety: int, session_factory, *, use_answer=False
+):
     await state.update_data(anxiety=anxiety)
+    data = await state.get_data()
+    await _persist_fields(session_factory, date.fromisoformat(data["day"]), anxiety=anxiety)
     await state.set_state(TrackStates.irritability)
     await _send(
         message,
@@ -198,8 +377,14 @@ async def _go_irritability(message: Message, state: FSMContext, anxiety: int, *,
     )
 
 
-async def _go_energy(message: Message, state: FSMContext, irritability: int, *, use_answer=False):
+async def _go_energy(
+    message: Message, state: FSMContext, irritability: int, session_factory, *, use_answer=False
+):
     await state.update_data(irritability=irritability)
+    data = await state.get_data()
+    await _persist_fields(
+        session_factory, date.fromisoformat(data["day"]), irritability=irritability
+    )
     await state.set_state(TrackStates.energy)
     await _send(
         message,
@@ -209,8 +394,12 @@ async def _go_energy(message: Message, state: FSMContext, irritability: int, *, 
     )
 
 
-async def _go_appetite(message: Message, state: FSMContext, energy: int, *, use_answer=False):
+async def _go_appetite(
+    message: Message, state: FSMContext, energy: int, session_factory, *, use_answer=False
+):
     await state.update_data(energy=energy)
+    data = await state.get_data()
+    await _persist_fields(session_factory, date.fromisoformat(data["day"]), energy=energy)
     await state.set_state(TrackStates.appetite)
     await _send(
         message,
@@ -220,8 +409,12 @@ async def _go_appetite(message: Message, state: FSMContext, energy: int, *, use_
     )
 
 
-async def _go_sleep(message: Message, state: FSMContext, appetite: int, *, use_answer=False):
+async def _go_sleep(
+    message: Message, state: FSMContext, appetite: int, session_factory, *, use_answer=False
+):
     await state.update_data(appetite=appetite)
+    data = await state.get_data()
+    await _persist_fields(session_factory, date.fromisoformat(data["day"]), appetite=appetite)
     await state.set_state(TrackStates.sleep)
     await _send(
         message,
@@ -240,10 +433,12 @@ async def _go_meds(
     use_answer=False,
 ):
     await state.update_data(sleep_hours=sleep_hours)
-    await state.set_state(TrackStates.meds)
 
     data = await state.get_data()
     day = date.fromisoformat(data["day"])
+    await _persist_fields(session_factory, day, sleep_hours=sleep_hours)
+
+    await state.set_state(TrackStates.meds)
 
     async with session_factory() as session:
         meds = (
@@ -253,19 +448,17 @@ async def _go_meds(
                 .order_by(MedActive.started_at)
             )
         ).all()
-        already_taken_keys = set(
-            (
-                await session.scalars(
-                    select(MedicationLog.med_key).where(
-                        MedicationLog.day == day,
-                        MedicationLog.taken.is_(True),
-                    )
-                )
+        logged = {
+            row.med_key: row.taken
+            for row in (
+                await session.scalars(select(MedicationLog).where(MedicationLog.day == day))
             ).all()
-        )
+        }
 
-    meds_taken = [{"key": m.key, "taken": True} for m in meds if m.key in already_taken_keys]
-    meds_pending = [m.key for m in meds if m.key not in already_taken_keys]
+    # A med with any log row for today (taken True *or* False) is already
+    # answered — skip it so resume doesn't re-ask answered meds.
+    meds_taken = [{"key": m.key, "taken": logged[m.key]} for m in meds if m.key in logged]
+    meds_pending = [m.key for m in meds if m.key not in logged]
     await state.update_data(meds_pending=meds_pending, meds_taken=meds_taken)
 
     if meds_pending:
@@ -275,83 +468,123 @@ async def _go_meds(
 
 
 @router.callback_query(TrackStates.mood, F.data.startswith("mood:"))
-async def cb_mood(cb: CallbackQuery, state: FSMContext):
+async def cb_mood(
+    cb: CallbackQuery,
+    state: FSMContext,
+    session_factory: async_sessionmaker[AsyncSession],
+):
     value = int(cb.data.split(":", 1)[1])
-    await _go_anxiety(cb.message, state, value)
+    await _go_anxiety(cb.message, state, value, session_factory)
     await cb.answer()
 
 
 @router.message(TrackStates.mood, F.text)
-async def msg_mood_input(message: Message, state: FSMContext):
+async def msg_mood_input(
+    message: Message,
+    state: FSMContext,
+    session_factory: async_sessionmaker[AsyncSession],
+):
     value = _parse_score(message.text, -3, 3)
     if value is None:
         await message.answer("⚠️ Не понял. Напишите число от −3 до +3 (или нажмите кнопку).")
         return
-    await _go_anxiety(message, state, value, use_answer=True)
+    await _go_anxiety(message, state, value, session_factory, use_answer=True)
 
 
 @router.callback_query(TrackStates.anxiety, F.data.startswith("anx:"))
-async def cb_anxiety(cb: CallbackQuery, state: FSMContext):
+async def cb_anxiety(
+    cb: CallbackQuery,
+    state: FSMContext,
+    session_factory: async_sessionmaker[AsyncSession],
+):
     value = int(cb.data.split(":", 1)[1])
-    await _go_irritability(cb.message, state, value)
+    await _go_irritability(cb.message, state, value, session_factory)
     await cb.answer()
 
 
 @router.message(TrackStates.anxiety, F.text)
-async def msg_anxiety_input(message: Message, state: FSMContext):
+async def msg_anxiety_input(
+    message: Message,
+    state: FSMContext,
+    session_factory: async_sessionmaker[AsyncSession],
+):
     value = _parse_score(message.text, 0, 3)
     if value is None:
         await message.answer("⚠️ Не понял. Напишите число от 0 до 3 (или нажмите кнопку).")
         return
-    await _go_irritability(message, state, value, use_answer=True)
+    await _go_irritability(message, state, value, session_factory, use_answer=True)
 
 
 @router.callback_query(TrackStates.irritability, F.data.startswith("irr:"))
-async def cb_irritability(cb: CallbackQuery, state: FSMContext):
+async def cb_irritability(
+    cb: CallbackQuery,
+    state: FSMContext,
+    session_factory: async_sessionmaker[AsyncSession],
+):
     value = int(cb.data.split(":", 1)[1])
-    await _go_energy(cb.message, state, value)
+    await _go_energy(cb.message, state, value, session_factory)
     await cb.answer()
 
 
 @router.message(TrackStates.irritability, F.text)
-async def msg_irritability_input(message: Message, state: FSMContext):
+async def msg_irritability_input(
+    message: Message,
+    state: FSMContext,
+    session_factory: async_sessionmaker[AsyncSession],
+):
     value = _parse_score(message.text, 0, 3)
     if value is None:
         await message.answer("⚠️ Не понял. Напишите число от 0 до 3 (или нажмите кнопку).")
         return
-    await _go_energy(message, state, value, use_answer=True)
+    await _go_energy(message, state, value, session_factory, use_answer=True)
 
 
 @router.callback_query(TrackStates.energy, F.data.startswith("energy:"))
-async def cb_energy(cb: CallbackQuery, state: FSMContext):
+async def cb_energy(
+    cb: CallbackQuery,
+    state: FSMContext,
+    session_factory: async_sessionmaker[AsyncSession],
+):
     value = int(cb.data.split(":", 1)[1])
-    await _go_appetite(cb.message, state, value)
+    await _go_appetite(cb.message, state, value, session_factory)
     await cb.answer()
 
 
 @router.message(TrackStates.energy, F.text)
-async def msg_energy_input(message: Message, state: FSMContext):
+async def msg_energy_input(
+    message: Message,
+    state: FSMContext,
+    session_factory: async_sessionmaker[AsyncSession],
+):
     value = _parse_score(message.text, -2, 2)
     if value is None:
         await message.answer("⚠️ Не понял. Напишите число от −2 до +2 (или нажмите кнопку).")
         return
-    await _go_appetite(message, state, value, use_answer=True)
+    await _go_appetite(message, state, value, session_factory, use_answer=True)
 
 
 @router.callback_query(TrackStates.appetite, F.data.startswith("appetite:"))
-async def cb_appetite(cb: CallbackQuery, state: FSMContext):
+async def cb_appetite(
+    cb: CallbackQuery,
+    state: FSMContext,
+    session_factory: async_sessionmaker[AsyncSession],
+):
     value = int(cb.data.split(":", 1)[1])
-    await _go_sleep(cb.message, state, value)
+    await _go_sleep(cb.message, state, value, session_factory)
     await cb.answer()
 
 
 @router.message(TrackStates.appetite, F.text)
-async def msg_appetite_input(message: Message, state: FSMContext):
+async def msg_appetite_input(
+    message: Message,
+    state: FSMContext,
+    session_factory: async_sessionmaker[AsyncSession],
+):
     value = _parse_score(message.text, -2, 2)
     if value is None:
         await message.answer("⚠️ Не понял. Напишите число от −2 до +2 (или нажмите кнопку).")
         return
-    await _go_sleep(message, state, value, use_answer=True)
+    await _go_sleep(message, state, value, session_factory, use_answer=True)
 
 
 @router.callback_query(TrackStates.sleep, F.data.startswith("sleep:"))
@@ -407,6 +640,8 @@ async def cb_med(
     taken = bool(int(taken_str))
 
     data = await state.get_data()
+    await _persist_med(session_factory, date.fromisoformat(data["day"]), key, taken)
+
     taken_list = list(data.get("meds_taken", []))
     taken_list.append({"key": key, "taken": taken})
     pending = [k for k in data.get("meds_pending", []) if k != key]
@@ -435,6 +670,8 @@ async def msg_med_input(
         await message.answer("⚠️ Не понял. Ответьте «да» или «нет» (или нажмите кнопку).")
         return
     key = pending[0]
+    await _persist_med(session_factory, date.fromisoformat(data["day"]), key, taken)
+
     taken_list = list(data.get("meds_taken", []))
     taken_list.append({"key": key, "taken": taken})
     pending = pending[1:]
@@ -470,7 +707,10 @@ async def cb_vpn(
     session_factory: async_sessionmaker[AsyncSession],
 ):
     payload = cb.data.split(":", 1)[1]
-    await state.update_data(vpn_hours=float(payload))
+    hours = float(payload)
+    await state.update_data(vpn_hours=hours)
+    data = await state.get_data()
+    await _persist_fields(session_factory, date.fromisoformat(data["day"]), vpn_hours=hours)
     await _ask_english(cb.message, state)
     await cb.answer()
 
@@ -486,6 +726,8 @@ async def msg_vpn_input(
         await message.answer("⚠️ Не понял. Введите число часов за день (0–24): 1.5, 2ч, полтора.")
         return
     await state.update_data(vpn_hours=hours)
+    data = await state.get_data()
+    await _persist_fields(session_factory, date.fromisoformat(data["day"]), vpn_hours=hours)
     await _ask_english(message, state, use_answer=True)
 
 
@@ -496,7 +738,10 @@ async def cb_english(
     session_factory: async_sessionmaker[AsyncSession],
 ):
     payload = cb.data.split(":", 1)[1]
-    await state.update_data(eng_hours=float(payload))
+    hours = float(payload)
+    await state.update_data(eng_hours=hours)
+    data = await state.get_data()
+    await _persist_fields(session_factory, date.fromisoformat(data["day"]), eng_hours=hours)
     await _maybe_ask_weight_or_save(cb.message, state, session_factory)
     await cb.answer()
 
@@ -512,6 +757,8 @@ async def msg_english_input(
         await message.answer("⚠️ Не понял. Введите число часов за день (0–24): 1.5, 2ч, полтора.")
         return
     await state.update_data(eng_hours=hours)
+    data = await state.get_data()
+    await _persist_fields(session_factory, date.fromisoformat(data["day"]), eng_hours=hours)
     await _maybe_ask_weight_or_save(message, state, session_factory, use_answer=True)
 
 
@@ -547,6 +794,8 @@ async def msg_weight(
         await message.answer("⚠️ Это не число. Попробуйте ещё раз или нажмите «Пропустить».")
         return
     await state.update_data(weight=weight)
+    data = await state.get_data()
+    await _persist_fields(session_factory, date.fromisoformat(data["day"]), weight=weight)
     await _save_and_finish(message, state, session_factory, use_answer=True)
 
 
@@ -570,6 +819,8 @@ async def _save_and_finish(
     data = await state.get_data()
     day = date.fromisoformat(data["day"])
 
+    # Steps were written through as they were answered; this final upsert is an
+    # idempotent safety net that also covers a skipped (button) weight step.
     async with session_factory() as session:
         existing = await session.get(MoodEntry, day)
         if existing:
