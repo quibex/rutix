@@ -83,11 +83,11 @@ def _med(key: str, name: str, dose: str = "50", started: date = date(2026, 5, 1)
     "text,expected",
     [("3", 3), ("+2", 2), ("-3", -3), ("0", 0), ("−1", -1), ("1.0", 1)],
 )
-async def test_msg_mood_accepts_typed_score(text, expected):
+async def test_msg_mood_accepts_typed_score(session, text, expected):
     state, data, holder = _make_state()
     msg = _make_msg(text)
 
-    await msg_mood_input(msg, state=state)
+    await msg_mood_input(msg, state=state, session_factory=_session_factory(session))
 
     assert data["mood"] == expected
     assert holder["value"] is TrackStates.anxiety
@@ -96,11 +96,11 @@ async def test_msg_mood_accepts_typed_score(text, expected):
 
 
 @pytest.mark.parametrize("text", ["4", "-4", "семь", "много", "1.5"])
-async def test_msg_mood_rejects_out_of_range_or_garbage(text):
+async def test_msg_mood_rejects_out_of_range_or_garbage(session, text):
     state, data, holder = _make_state()
     msg = _make_msg(text)
 
-    await msg_mood_input(msg, state=state)
+    await msg_mood_input(msg, state=state, session_factory=_session_factory(session))
 
     assert "mood" not in data
     assert holder["value"] is None
@@ -110,31 +110,31 @@ async def test_msg_mood_rejects_out_of_range_or_garbage(text):
 # --- anxiety / irritability (0..3) -----------------------------------------
 
 
-async def test_msg_anxiety_typed_advances():
+async def test_msg_anxiety_typed_advances(session):
     state, data, holder = _make_state(mood=0)
     msg = _make_msg("2")
 
-    await msg_anxiety_input(msg, state=state)
+    await msg_anxiety_input(msg, state=state, session_factory=_session_factory(session))
 
     assert data["anxiety"] == 2
     assert holder["value"] is TrackStates.irritability
 
 
-async def test_msg_anxiety_rejects_negative():
+async def test_msg_anxiety_rejects_negative(session):
     state, data, holder = _make_state(mood=0)
     msg = _make_msg("-1")
 
-    await msg_anxiety_input(msg, state=state)
+    await msg_anxiety_input(msg, state=state, session_factory=_session_factory(session))
 
     assert "anxiety" not in data
     assert holder["value"] is None
 
 
-async def test_msg_irritability_typed_advances():
+async def test_msg_irritability_typed_advances(session):
     state, data, holder = _make_state(mood=0, anxiety=0)
     msg = _make_msg("3")
 
-    await msg_irritability_input(msg, state=state)
+    await msg_irritability_input(msg, state=state, session_factory=_session_factory(session))
 
     assert data["irritability"] == 3
     assert holder["value"] is TrackStates.energy
@@ -143,32 +143,32 @@ async def test_msg_irritability_typed_advances():
 # --- energy / appetite (-2..+2) --------------------------------------------
 
 
-async def test_msg_energy_typed_advances():
+async def test_msg_energy_typed_advances(session):
     state, data, holder = _make_state(mood=0, anxiety=0, irritability=0)
     msg = _make_msg("+1")
 
-    await msg_energy_input(msg, state=state)
+    await msg_energy_input(msg, state=state, session_factory=_session_factory(session))
 
     assert data["energy"] == 1
     assert holder["value"] is TrackStates.appetite
 
 
-async def test_msg_appetite_typed_advances_to_sleep():
+async def test_msg_appetite_typed_advances_to_sleep(session):
     state, data, holder = _make_state(mood=0, anxiety=0, irritability=0, energy=0)
     msg = _make_msg("-2")
 
-    await msg_appetite_input(msg, state=state)
+    await msg_appetite_input(msg, state=state, session_factory=_session_factory(session))
 
     assert data["appetite"] == -2
     assert holder["value"] is TrackStates.sleep
     assert "час" in msg.answer.call_args.args[0].lower()
 
 
-async def test_msg_energy_rejects_out_of_range():
+async def test_msg_energy_rejects_out_of_range(session):
     state, data, holder = _make_state(mood=0, anxiety=0, irritability=0)
     msg = _make_msg("3")
 
-    await msg_energy_input(msg, state=state)
+    await msg_energy_input(msg, state=state, session_factory=_session_factory(session))
 
     assert "energy" not in data
     assert holder["value"] is None

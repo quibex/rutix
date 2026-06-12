@@ -89,11 +89,18 @@ _MINUTES_RE = re.compile(
 )
 
 
-def parse_hours_text(text: str) -> float | None:
+# A day holds 24 hours — anything above this is not a duration-in-a-day but a
+# misrouted reply (e.g. a "45"-minute med snooze typed while /track was still
+# waiting on the English step). Reject it so it can't be recorded as 45ч.
+MAX_HOURS_IN_DAY = 24.0
+
+
+def parse_hours_text(text: str, max_hours: float = MAX_HOURS_IN_DAY) -> float | None:
     """Parse user-typed durations into a float of hours.
 
     Examples: "1.5" / "1,5" / "2ч" / "2 ч" / "30мин" / "полтора" / "полчаса"
-    Returns None for unparseable or negative input.
+    Returns None for unparseable, negative, or out-of-range input (more hours
+    than fit in a day — see `MAX_HOURS_IN_DAY`).
     """
     if not text:
         return None
@@ -103,13 +110,13 @@ def parse_hours_text(text: str) -> float | None:
     m = _HOURS_RE.match(s)
     if m:
         v = float(m.group(1).replace(",", "."))
-        if v < 0:
+        if v < 0 or v > max_hours:
             return None
         return v
     m = _MINUTES_RE.match(s)
     if m:
         v = int(m.group(1)) / 60.0
-        if v < 0:
+        if v < 0 or v > max_hours:
             return None
         return v
     return None

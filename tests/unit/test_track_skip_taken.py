@@ -115,8 +115,9 @@ async def test_track_asks_all_meds_when_none_taken(session):
     assert data["meds_taken"] == []
 
 
-async def test_track_ignores_taken_false_logs(session):
-    """A log with taken=False (from a previous /track 'no' answer) should not skip the question."""
+async def test_track_skips_med_answered_no(session):
+    """A log with taken=False is an *answered* step (the user said "no") — with
+    write-through persistence + resume, it's skipped, not re-asked."""
     await _add_med(session, "seizar", "Сейзар")
     session.add(MedicationLog(day=date(2026, 5, 23), med_key="seizar", taken=False))
     await session.commit()
@@ -126,5 +127,5 @@ async def test_track_ignores_taken_false_logs(session):
 
     await cb_sleep(cb, state=state, session_factory=_session_factory(session))
 
-    assert "seizar" in data["meds_pending"]
-    assert data["meds_taken"] == []
+    assert "seizar" not in data["meds_pending"]
+    assert data["meds_taken"] == [{"key": "seizar", "taken": False}]

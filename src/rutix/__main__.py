@@ -6,6 +6,7 @@ import logging
 from pythonjsonlogger import jsonlogger
 
 from rutix.bot.app import BOT_COMMANDS, build_bot, build_dispatcher
+from rutix.bot.notify import Notifier
 from rutix.db.engine import make_engine, make_session_factory
 from rutix.integrations.claude import ClaudeClient
 from rutix.integrations.github import GitHubClient
@@ -42,8 +43,13 @@ async def _run() -> None:
     dp["todoist"] = todoist
     dp["settings"] = settings
 
+    # Cron jobs send via a Notifier so any standalone message (med reminder,
+    # evening ping, …) cancels an in-progress /track step — the user's next
+    # reply then reaches its intended handler (e.g. a med snooze), and /track
+    # resumes from the first unanswered step.
+    notifier = Notifier(bot, dp.storage, settings.telegram_user_id)
     scheduler = make_scheduler(
-        session_factory, github, todoist, claude, bot, settings.telegram_user_id, settings.tz
+        session_factory, github, todoist, claude, notifier, settings.telegram_user_id, settings.tz
     )
     scheduler.start()
 

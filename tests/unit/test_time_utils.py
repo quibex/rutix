@@ -184,3 +184,18 @@ def test_parse_hours_text_returns_none_on_garbage():
 
 def test_parse_hours_text_rejects_negative():
     assert parse_hours_text("-1") is None
+
+
+def test_parse_hours_text_rejects_more_than_a_day():
+    # A "45"-minute med snooze typed while /track waits on English must not be
+    # accepted as 45 hours — a day holds at most 24.
+    assert parse_hours_text("45") is None
+    assert parse_hours_text("25") is None
+    assert parse_hours_text("25ч") is None
+    assert parse_hours_text("24") == 24.0  # boundary is inclusive
+    assert parse_hours_text("1500мин") is None  # 25h via the minutes branch
+
+
+def test_parse_hours_text_custom_max():
+    assert parse_hours_text("10", max_hours=5.0) is None
+    assert parse_hours_text("5", max_hours=5.0) == 5.0
