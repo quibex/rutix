@@ -181,6 +181,31 @@ def parse_done(md: str) -> list[str]:
     return _parse_bullets(md, "Что сделано")
 
 
+# --- Words (## Слова) -------------------------------------------------------
+
+WORDS_TITLE = "Слова"
+
+
+def parse_words(md: str) -> list[str]:
+    """Return non-empty bullets from the ## Слова section. Missing → []."""
+    return _parse_bullets(md, WORDS_TITLE)
+
+
+def append_word(md: str, word: str, difficulty: int) -> str:
+    """Append `- <word> (<difficulty>)` to the ## Слова section.
+
+    `difficulty` is the recall difficulty 1–3 (1 — вспомнил легко … 3 — еле
+    вспомнил). Duplicates are allowed on purpose — forgetting the same word
+    twice is itself a signal. Creates the section at EOF if the daily file
+    doesn't have one yet.
+    """
+    line = f"{word} ({difficulty})"
+    if has_section(md, WORDS_TITLE):
+        body = _section_body(md, WORDS_TITLE)
+        return _replace_section_body(md, WORDS_TITLE, _append_bullet(body, line))
+    return upsert_section(md, WORDS_TITLE, f"\n- {line}\n")
+
+
 # --- Habits -----------------------------------------------------------------
 
 _HABIT_LINE_RE = re.compile(r"^(\s*-\s*\[)([ x])(\]\s*)(.+?)\s*$")
