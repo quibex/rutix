@@ -15,7 +15,7 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
-from aiogram.filters import Command
+from aiogram.filters import BaseFilter, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -342,6 +342,37 @@ async def cmd_track(
 
     await message.answer(f"📊 Продолжаем трек за {today.isoformat()}.")
     await _prompt_step(message, state, step, session_factory)
+
+
+# --- Stale-session guard ---------------------------------------------------
+#
+# FSM state lives in memory and survives across days while the bot runs. An
+# abandoned /track (e.g. the user never answered the Saturday weight step)
+# would otherwise sit in a TrackStates state and silently eat the next number
+# the user types for something else — like a med-reminder snooze read as weight.
+# This guard catches input that lands in a /track step started on an earlier
+# subjective day, drops the session, and asks the user to repeat.
+
+
+class _StaleTrackFilter(BaseFilter):
+    async def __call__(self, message: Message, state: FSMContext, settings: Settings) -> bool:
+        current = await state.get_state()
+        if current is None or not current.startswith(f"{TrackStates.__name__}:"):
+            return False
+        day_iso = (await state.get_data()).get("day")
+        if not day_iso:
+            return False
+        today = subjective_today(datetime.now(ZoneInfo(settings.tz)), settings.tz)
+        return date.fromisoformat(day_iso) < today
+
+
+@router.message(_StaleTrackFilter())
+async def msg_track_stale(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer(
+        "⏳ Прошлая сессия /track устарела и отменена.\n"
+        "Повторите ввод или начните заново через /track."
+    )
 
 
 # --- Step transitions (shared by button callbacks and text input) ----------
