@@ -151,13 +151,19 @@ async def test_msg_word_ignores_empty(fake_message, fake_state, fake_settings, f
     fake_message.answer.assert_not_awaited()
 
 
-async def test_msg_word_when_daily_missing(fake_message, fake_state, fake_settings, fake_github):
+async def test_msg_word_scaffolds_when_daily_missing(
+    fake_message, fake_state, fake_settings, fake_github
+):
+    """Missing daily file is created from a template and the word is written."""
     fake_github.read = AsyncMock(return_value=None)
     fake_message.text = "слово 2"
     await msg_word(fake_message, state=fake_state, settings=fake_settings, github=fake_github)
 
-    fake_github.write.assert_not_called()
-    assert "не найден" in fake_message.answer.call_args.args[0].lower()
+    fake_github.write.assert_awaited_once()
+    # sha=None → create (not update) on the remote.
+    assert fake_github.write.call_args.kwargs.get("sha") is None
+    written = fake_github.write.call_args.args[1]
+    assert "слово (2)" in written
 
 
 # --- cb_difficulty ----------------------------------------------------------

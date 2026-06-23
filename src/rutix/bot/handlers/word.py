@@ -26,6 +26,7 @@ from aiogram.types import (
     Message,
 )
 
+from rutix.daily_io import daily_path, read_or_init_daily
 from rutix.integrations.github import GitHubClient
 from rutix.markdown.daily import append_word
 from rutix.settings import Settings
@@ -75,12 +76,9 @@ async def _write_word(
     difficulty: int,
 ):
     day = subjective_today(datetime.now(ZoneInfo(settings.tz)), settings.tz)
-    path = f"daily/{day.isoformat()}.md"
+    path = daily_path(day)
 
-    file = await github.read(path)
-    if file is None:
-        await message.answer(f"⚠️ Файл {path} не найден.\nПроверьте что он создан в Obsidian.")
-        return
+    file = await read_or_init_daily(github, day)
 
     new_text = append_word(file.text, word, difficulty)
     sha = await github.write(

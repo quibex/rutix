@@ -7,6 +7,7 @@ from datetime import date
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from rutix.daily_io import daily_path, read_or_init_daily
 from rutix.db.models import FlushLog, MedActive, MedicationLog, MoodEntry
 from rutix.integrations.github import GitHubClient
 from rutix.markdown.daily import (
@@ -23,10 +24,6 @@ logger = logging.getLogger(__name__)
 WELLBEING_TITLE = "Самочувствие"
 
 
-def _daily_path(day: date) -> str:
-    return f"daily/{day.isoformat()}.md"
-
-
 async def flush_day(
     session: AsyncSession,
     github: GitHubClient,
@@ -34,10 +31,12 @@ async def flush_day(
 ) -> str | None:
     """Write today's wellbeing + time data into daily/<day>.md.
 
+    The daily file is scaffolded automatically if the user hasn't created it in
+    Obsidian yet, so the day's data is never dropped.
+
     Returns the new commit SHA on success, or None when:
     - already flushed (idempotent re-run),
     - no MoodEntry for that day (nothing to write),
-    - daily file doesn't exist in the repo,
     - content already matches (no-op).
     """
     period_id = f"day:{day.isoformat()}"
@@ -77,11 +76,10 @@ async def flush_day(
         ],
     )
 
-    path = _daily_path(day)
-    file = await github.read(path)
-    if file is None:
-        logger.warning("flush_day skipped — no daily file at %s", path)
-        return None
+    path = daily_path(day)
+    file = await read_or_init_daily(github, day)
+    if file.sha is None:
+        logger.info("flush_day scaffolding missing daily file at %s", path)
 
     new_text = upsert_section(file.text, WELLBEING_TITLE, render_wellbeing_section(well))
 
