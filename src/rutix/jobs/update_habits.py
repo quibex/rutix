@@ -13,6 +13,7 @@ import re
 from datetime import date
 from typing import NamedTuple
 
+from rutix.daily_io import daily_path, read_or_init_daily
 from rutix.integrations.claude import ClaudeClient
 from rutix.integrations.github import GitHubClient
 from rutix.integrations.todoist import TodoistClient
@@ -30,8 +31,8 @@ class UpdateHabitsResult(NamedTuple):
     appended_done: list[str] = []
     # When sha is None: which branch fired. One of:
     # - "no_completions" — Todoist returned 0 completions for the day
-    # - "no_daily_file"  — daily/<date>.md doesn't exist in repo
     # - "no_op"          — completions exist but everything was already marked
+    # ("no_daily_file" is no longer produced — a missing file is scaffolded.)
     skip_reason: str | None = None
 
 
@@ -87,13 +88,10 @@ async def update_habits(
             sha=None, marked=[], appended_done=[], skip_reason="no_completions"
         )
 
-    path = f"daily/{day.isoformat()}.md"
-    file = await github.read(path)
-    if file is None:
-        logger.warning("update_habits skipped — no daily file for %s", day)
-        return UpdateHabitsResult(
-            sha=None, marked=[], appended_done=[], skip_reason="no_daily_file"
-        )
+    path = daily_path(day)
+    file = await read_or_init_daily(github, day)
+    if file.sha is None:
+        logger.info("update_habits scaffolding missing daily file for %s", day)
 
     try:
         habit_labels = parse_habit_labels(file.text)

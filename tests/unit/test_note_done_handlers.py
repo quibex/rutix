@@ -115,12 +115,19 @@ async def test_cmd_done_no_args_enters_state(fake_message, fake_state, fake_sett
     assert answer_args.kwargs.get("reply_markup") is not None
 
 
-async def test_cmd_note_when_daily_missing(fake_message, fake_state, fake_settings, fake_github):
+async def test_cmd_note_scaffolds_when_daily_missing(
+    fake_message, fake_state, fake_settings, fake_github
+):
+    """Missing daily file is created from a template and the note is written."""
     fake_github.read = AsyncMock(return_value=None)
     fake_message.text = "/note hi"
     await cmd_note(fake_message, state=fake_state, settings=fake_settings, github=fake_github)
-    fake_github.write.assert_not_called()
-    assert "не найден" in fake_message.answer.call_args.args[0].lower()
+    fake_github.write.assert_awaited_once()
+    # sha=None → create (not update) on the remote.
+    assert fake_github.write.call_args.kwargs.get("sha") is None
+    written = fake_github.write.call_args.args[1]
+    notes = written.split("## Заметки", 1)[1]
+    assert "- hi" in notes
 
 
 async def test_msg_await_text_writes_done(fake_message, fake_state, fake_settings, fake_github):

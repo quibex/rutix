@@ -96,11 +96,9 @@ def fake_message():
 async def test_cmd_eat_shows_preview_with_buttons_does_not_write(
     fake_message, fake_state, fake_github, fake_claude, fake_settings
 ):
-    # 1st github.read = daily file existence check; 2nd = reference fetch
-    fake_github.read.side_effect = [
-        FileContent(text=DAILY, sha="dsha"),
-        FileContent(text="ref content", sha="rsha"),
-    ]
+    # _process_input reads only the reference (the daily file is created at
+    # write time in cb_ok, not during parsing).
+    fake_github.read.return_value = FileContent(text="ref content", sha="rsha")
     fake_claude.parse_eat.return_value = [MealItem("", "Шаурма", 450, 22.0, 18.0, 45.0)]
     fake_message.text = "/eat шаурма"
 
@@ -161,10 +159,7 @@ async def test_cb_ok_writes_to_daily(fake_state, fake_github, fake_settings):
 async def test_cmd_eat_replies_with_error_if_claude_fails(
     fake_message, fake_state, fake_github, fake_claude, fake_settings
 ):
-    fake_github.read.side_effect = [
-        FileContent(text=DAILY, sha="dsha"),
-        FileContent(text="ref", sha="x"),
-    ]
+    fake_github.read.return_value = FileContent(text="ref", sha="x")
     fake_claude.parse_eat.side_effect = ValueError("bad json")
 
     fake_message.text = "/eat что-то непонятное"
@@ -216,10 +211,7 @@ async def test_cmd_eat_vchera_routes_to_yesterdays_daily(
     today = subjective_today(datetime.now(MSK), "Europe/Moscow")
     yesterday = today.fromordinal(today.toordinal() - 1)
 
-    fake_github.read.side_effect = [
-        FileContent(text=DAILY, sha="dsha"),
-        FileContent(text="ref content", sha="rsha"),
-    ]
+    fake_github.read.return_value = FileContent(text="ref content", sha="rsha")
     fake_claude.parse_eat.return_value = [MealItem("", "Онигири", 176, 3.9, 4.5, 30.0)]
     fake_message.text = "/eat вчера онигири с тунцом вв"
 
@@ -231,9 +223,8 @@ async def test_cmd_eat_vchera_routes_to_yesterdays_daily(
         claude=fake_claude,
     )
 
-    daily_path = fake_github.read.call_args_list[0].args[0]
-    assert daily_path == f"daily/{yesterday.isoformat()}.md"
-
+    # Day routing is reflected in the saved session day (asserted below); the
+    # daily file itself is only read/created at write time (cb_ok).
     claude_text = fake_claude.parse_eat.call_args.args[0]
     assert not claude_text.lower().startswith("вчера")
     assert "онигири" in claude_text.lower()

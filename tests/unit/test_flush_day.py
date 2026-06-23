@@ -186,13 +186,25 @@ async def test_flush_day_skips_if_no_mood_entry(session, fake_github):
     fake_github.write.assert_not_called()
 
 
-async def test_flush_day_skips_if_no_daily_file(session, fake_github):
+async def test_flush_day_scaffolds_if_no_daily_file(session, fake_github):
+    """Missing daily file is created from a template and the data is written."""
     fake_github.read = AsyncMock(return_value=None)
     session.add(MoodEntry(day=date(2026, 5, 13), mood=1, sleep_hours=7.0))
     await session.commit()
     sha = await flush_day(session, fake_github, date(2026, 5, 13))
-    assert sha is None
-    fake_github.write.assert_not_called()
+    assert sha == "newsha"
+    fake_github.write.assert_awaited_once()
+    # sha=None → create (not update) on the remote.
+    assert fake_github.write.call_args.kwargs.get("sha") is None
+    written_text = fake_github.write.call_args.args[1]
+    assert "## Самочувствие" in written_text
+    assert "- Настроение: +1" in written_text
+    # Scaffolded sections are present for later /eat, /done, etc.
+    assert "## Питание" in written_text
+    assert "## Что сделано" in written_text
+
+    log = await session.get(FlushLog, "day:2026-05-13")
+    assert log is not None
 
 
 async def test_flush_day_no_op_if_content_unchanged(session, fake_github):

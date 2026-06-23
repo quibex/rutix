@@ -103,16 +103,22 @@ async def test_skips_when_no_completions(fake_github, fake_todoist, fake_claude)
     fake_claude.classify_completions.assert_not_called()
 
 
-async def test_skips_when_daily_missing(fake_github, fake_todoist, fake_claude):
+async def test_scaffolds_daily_when_missing(fake_github, fake_todoist, fake_claude):
+    """Missing daily file is created from a template and completions are saved."""
     fake_github.read = AsyncMock(return_value=None)
     fake_todoist.completed_titles_for_day.return_value = {"🌅 Skincare AM"}
+    # Scaffold has no habits → everything is unmatched and goes to Что сделано.
+    fake_claude.classify_completions.return_value = (set(), ["🌅 Skincare AM"])
 
     result = await update_habits(fake_github, fake_todoist, fake_claude, day=date(2026, 5, 13))
 
-    assert result.sha is None
-    assert result.marked == []
-    assert result.skip_reason == "no_daily_file"
-    fake_github.write.assert_not_called()
+    assert result.sha == "newsha"
+    assert result.appended_done == ["🌅 Skincare AM"]
+    fake_github.write.assert_awaited_once()
+    # sha=None → create (not update) on the remote.
+    assert fake_github.write.call_args.kwargs.get("sha") is None
+    written = fake_github.write.call_args.args[1]
+    assert "- 🌅 Skincare AM" in written
 
 
 async def test_skips_when_classifier_returns_nothing_already_checked(

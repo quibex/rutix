@@ -8,6 +8,7 @@ The rest stays as the user wrote it.
 
 import re
 from dataclasses import dataclass, field
+from datetime import date
 
 
 @dataclass
@@ -42,6 +43,84 @@ class WellbeingData:
     weight: float | None = None  # rendered only when include_weight=True
     include_weight: bool = False  # Saturday-only
     meds: list[WellbeingMed] = field(default_factory=list)
+
+
+# --- New-file scaffold ------------------------------------------------------
+
+_RU_WEEKDAYS = (
+    "Понедельник",
+    "Вторник",
+    "Среда",
+    "Четверг",
+    "Пятница",
+    "Суббота",
+    "Воскресенье",
+)
+_RU_MONTHS_GENITIVE = (
+    "января",
+    "февраля",
+    "марта",
+    "апреля",
+    "мая",
+    "июня",
+    "июля",
+    "августа",
+    "сентября",
+    "октября",
+    "ноября",
+    "декабря",
+)
+
+
+def render_daily_template(day: date) -> str:
+    """Build a fresh daily/<day>.md scaffold matching the Obsidian structure.
+
+    Used when the bot needs to write a day's data (mood, meds, food, words,
+    Todoist completions) but the user hasn't created the file in Obsidian yet —
+    better to scaffold and save than to drop the day entirely. The user can
+    fill in their plan / habits later; per-section edits merge cleanly.
+    """
+    iso = day.isocalendar()
+    week_id = f"{iso.year}-W{iso.week:02d}"
+    header = f"# {_RU_WEEKDAYS[day.weekday()]}, {day.day} {_RU_MONTHS_GENITIVE[day.month - 1]}"
+    return (
+        f"{header}\n"
+        "\n"
+        f"[[{week_id}|← Неделя {iso.week}]]\n"
+        "\n"
+        "## 🗓 План на день\n"
+        "\n"
+        "-\n"
+        "\n"
+        "---\n"
+        "\n"
+        "## Сон\n"
+        "\n"
+        "- Отбой:\n"
+        "- Подъём:\n"
+        "\n"
+        "## Время (ч)\n"
+        "\n"
+        "- VPN:\n"
+        "- Английский:\n"
+        "\n"
+        "## Привычки\n"
+        "\n"
+        "## Питание\n"
+        "\n"
+        "| Приём | Что | Ккал | Б | Ж | У |\n"
+        "|-------|-----|------|---|---|---|\n"
+        "|  |  |  |  |  |  |\n"
+        "| **Итого** |  |  |  |  |  |\n"
+        "\n"
+        "## Что сделано\n"
+        "\n"
+        "-\n"
+        "\n"
+        "## Заметки\n"
+        "\n"
+        "-\n"
+    )
 
 
 # --- Section helpers --------------------------------------------------------

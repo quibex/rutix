@@ -12,10 +12,15 @@ import httpx
 
 @dataclass(frozen=True)
 class FileContent:
-    """Decoded text + sha needed to update the file."""
+    """Decoded text + sha needed to update the file.
+
+    `sha` is `None` for an in-memory file that doesn't exist on the remote yet
+    (a freshly scaffolded daily file). Passing `sha=None` to `write` creates the
+    file instead of updating it.
+    """
 
     text: str
-    sha: str
+    sha: str | None
 
 
 class GitHubClient:

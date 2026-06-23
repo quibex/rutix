@@ -34,6 +34,7 @@ from aiogram.types import (
     Message,
 )
 
+from rutix.daily_io import daily_path, read_or_init_daily
 from rutix.integrations.claude import ClaudeClient
 from rutix.integrations.github import GitHubClient
 from rutix.markdown.daily import MealItem, append_meal
@@ -242,17 +243,8 @@ async def _process_input(
         await state.update_data(preview_chat_id=msg.chat.id, preview_message_id=msg.message_id)
         return
 
-    # Sanity check before burning Claude tokens
-    daily_path = f"daily/{day_iso}.md"
-    daily_file = await github.read(daily_path)
-    if daily_file is None:
-        await message.answer(
-            f"⚠️ Файл {daily_path} не найден в репозитории.\n"
-            "Создайте его в Obsidian и попробуйте снова."
-        )
-        await state.clear()
-        return
-
+    # The daily file is scaffolded on write (see cb_ok) if the user hasn't
+    # created it in Obsidian yet — no pre-flight existence check needed.
     user_input = _build_user_input(text, image_b64s)
 
     thinking_msg = await message.answer("🤔 Разбираю…")
@@ -514,22 +506,15 @@ async def cb_ok(
     slot = data.get("slot", "Перекус")
     day = date.fromisoformat(data["day"])
     items = _items_from_dump(items_dump, slot)
-    daily_path = f"daily/{day.isoformat()}.md"
 
-    daily_file = await github.read(daily_path)
-    if daily_file is None:
-        await cb.message.edit_text(
-            f"⚠️ Файл {daily_path} пропал между разбором и записью. Попробуйте ещё раз."
-        )
-        await cb.answer()
-        return
+    daily_file = await read_or_init_daily(github, day)
 
     new_text = daily_file.text
     for item in items:
         new_text = append_meal(new_text, item)
 
     daily_sha = await github.write(
-        daily_path,
+        daily_path(day),
         new_text,
         f"eat({day.isoformat()}): {len(items)} позиций",
         sha=daily_file.sha,
