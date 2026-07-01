@@ -1,9 +1,9 @@
 """Standalone bot notifications that cancel any in-progress single-user flow.
 
 A cron-sent message (med reminder, snooze re-send, evening ping, daily plan …)
-arriving while `/track` is waiting on a step must invalidate that pending step —
+arriving while `/report` is waiting on a step must invalidate that pending step —
 otherwise the user's next reply (e.g. "45" meaning "snooze Atarax 45 min") gets
-swallowed by the stale prompt. Persisted step values survive (the /track resume
+swallowed by the stale prompt. Persisted step values survive (the /report resume
 logic rebuilds progress from the DB), so cancelling loses nothing.
 
 `Notifier` is a transparent stand-in for `Bot`: it proxies every attribute to

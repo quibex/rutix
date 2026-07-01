@@ -2,8 +2,9 @@ import pytest
 
 from rutix.markdown.daily import (
     MealItem,
-    WellbeingData,
-    WellbeingMed,
+    ReportData,
+    ReportMed,
+    StateSnapshot,
     append_done,
     append_meal,
     append_note,
@@ -13,7 +14,8 @@ from rutix.markdown.daily import (
     parse_habit_labels,
     parse_meals,
     parse_notes,
-    render_wellbeing_section,
+    render_report_section,
+    render_state_section,
     update_habits_checked,
     update_time_section,
     upsert_section,
@@ -282,60 +284,70 @@ def test_has_section_returns_true_only_when_present():
     assert not has_section(md, "Самочувствие")
 
 
-# --- render_wellbeing_section ---
+# --- render_state_section ---
 
 
-def test_render_wellbeing_weekday_no_weight():
-    body = render_wellbeing_section(
-        WellbeingData(
-            mood=1,
-            anxiety=0,
-            irritability=0,
+def test_render_state_one_snapshot():
+    body = render_state_section([StateSnapshot("09:15", mood=1, energy=0, appetite=-1)])
+    assert "- 09:15 — настроение: +1, энергия: 0, аппетит: -1" in body
+
+
+def test_render_state_multiple_snapshots_one_line_each():
+    body = render_state_section(
+        [
+            StateSnapshot("09:00", mood=1, energy=1, appetite=1),
+            StateSnapshot("18:30", mood=-2, energy=0, appetite=2),
+        ]
+    )
+    lines = [line for line in body.splitlines() if line.strip()]
+    assert len(lines) == 2
+    assert lines[0].startswith("- 09:00 — настроение: +1")
+    assert lines[1].startswith("- 18:30 — настроение: -2")
+
+
+def test_render_state_empty_is_placeholder():
+    assert render_state_section([]).strip() == "-"
+
+
+def test_render_state_unknown_values_render_as_dash():
+    body = render_state_section([StateSnapshot("07:00")])
+    assert "настроение: —, энергия: —, аппетит: —" in body
+
+
+# --- render_report_section ---
+
+
+def test_render_report_weekday_no_weight():
+    body = render_report_section(
+        ReportData(
             sleep_hours=8.0,
             include_weight=False,
             meds=[
-                WellbeingMed("Сейзар", taken=True, dose="25"),
-                WellbeingMed("Гидр.К", taken=True, dose="12.5"),
+                ReportMed("Сейзар", taken=True, dose="25"),
+                ReportMed("Гидр.К", taken=True, dose="12.5"),
             ],
         )
     )
-    assert "- Настроение: +1" in body
-    assert "- Тревога: 0" in body
-    assert "- Раздражительность: 0" in body
     assert "- Сон (ч): 8" in body
     assert "- Сейзар: ✓ 25" in body
     assert "- Гидр.К: ✓ 12.5" in body
     assert "Вес:" not in body
 
 
-def test_render_wellbeing_saturday_includes_weight():
-    body = render_wellbeing_section(WellbeingData(weight=57.0, include_weight=True))
+def test_render_report_saturday_includes_weight():
+    body = render_report_section(ReportData(weight=57.0, include_weight=True))
     assert "- Вес: 57" in body
 
 
-def test_render_wellbeing_unknown_values_render_as_dash():
-    body = render_wellbeing_section(WellbeingData())
-    assert "- Настроение: —" in body
-    assert "- Тревога: —" in body
+def test_render_report_unknown_values_render_as_dash():
+    body = render_report_section(ReportData())
     assert "- Сон (ч): —" in body
 
 
-def test_render_wellbeing_med_not_taken_shows_cross():
-    body = render_wellbeing_section(
-        WellbeingData(meds=[WellbeingMed("Сейзар", taken=False, dose="25")])
-    )
+def test_render_report_med_not_taken_shows_cross():
+    body = render_report_section(ReportData(meds=[ReportMed("Сейзар", taken=False, dose="25")]))
     assert "- Сейзар: ✗" in body
     assert "✓" not in body
-
-
-def test_render_wellbeing_negative_mood():
-    body = render_wellbeing_section(WellbeingData(mood=-2))
-    assert "- Настроение: -2" in body
-
-
-def test_render_wellbeing_zero_mood_no_sign():
-    body = render_wellbeing_section(WellbeingData(mood=0))
-    assert "- Настроение: 0" in body
 
 
 # --- update_time_section ---

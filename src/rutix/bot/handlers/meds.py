@@ -470,7 +470,7 @@ async def msg_snooze_minutes(
     the MedSnooze table, which med_reminder_tick picks up each minute."""
     current_state = await state.get_state()
     if current_state is not None:
-        return  # don't steal input from active /track, /meds, /eat flows
+        return  # don't steal input from active /state, /report, /meds, /eat flows
 
     m = _SNOOZE_RE.match(message.text)
     if m is None:

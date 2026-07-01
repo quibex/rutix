@@ -44,9 +44,9 @@ async def _run() -> None:
     dp["settings"] = settings
 
     # Cron jobs send via a Notifier so any standalone message (med reminder,
-    # evening ping, …) cancels an in-progress /track step — the user's next
-    # reply then reaches its intended handler (e.g. a med snooze), and /track
-    # resumes from the first unanswered step.
+    # evening ping, …) cancels an in-progress /report (or /state) step — the
+    # user's next reply then reaches its intended handler (e.g. a med snooze),
+    # and /report resumes from the first unanswered step.
     notifier = Notifier(bot, dp.storage, settings.telegram_user_id)
     scheduler = make_scheduler(
         session_factory, github, todoist, claude, notifier, settings.telegram_user_id, settings.tz

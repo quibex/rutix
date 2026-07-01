@@ -1,9 +1,11 @@
 """Parse and edit sections of daily/*.md files.
 
 A daily file has these sections (top-to-bottom): 🗓 План на день, Сон,
-Время (ч), Самочувствие, Привычки, Питание (table), Что сделано, Заметки.
-We touch Время (ч) / Самочувствие / Привычки / Питание / Что сделано / Заметки.
-The rest stays as the user wrote it.
+Время (ч), Самочувствие, Отчёт, Привычки, Питание (table), Что сделано, Заметки.
+We touch Время (ч) / Самочувствие / Отчёт / Привычки / Питание / Что сделано /
+Заметки. `## Самочувствие` is the /state log (timestamped lines); `## Отчёт`
+holds the once-a-day /report data (sleep, weight, meds). The rest stays as the
+user wrote it.
 """
 
 import re
@@ -23,8 +25,18 @@ class MealItem:
 
 
 @dataclass
-class WellbeingMed:
-    """One med row in the ## Самочувствие section."""
+class StateSnapshot:
+    """One /state snapshot — a line in the ## Самочувствие log."""
+
+    time_label: str  # local "HH:MM" the snapshot was taken
+    mood: int | None = None
+    energy: int | None = None
+    appetite: int | None = None
+
+
+@dataclass
+class ReportMed:
+    """One med row in the ## Отчёт section."""
 
     column_label: str  # short label as shown in the daily file, e.g. "Сейзар", "Гидр.К"
     taken: bool
@@ -32,17 +44,13 @@ class WellbeingMed:
 
 
 @dataclass
-class WellbeingData:
-    """Inputs for the ## Самочувствие section. Optional fields render as "—"."""
+class ReportData:
+    """Inputs for the ## Отчёт section. Optional fields render as "—"."""
 
-    mood: int | None = None
-    anxiety: int | None = None
-    irritability: int | None = None
-    appetite: int | None = None
     sleep_hours: float | None = None
     weight: float | None = None  # rendered only when include_weight=True
     include_weight: bool = False  # Saturday-only
-    meds: list[WellbeingMed] = field(default_factory=list)
+    meds: list[ReportMed] = field(default_factory=list)
 
 
 # --- New-file scaffold ------------------------------------------------------
@@ -103,6 +111,14 @@ def render_daily_template(day: date) -> str:
         "\n"
         "- VPN:\n"
         "- Английский:\n"
+        "\n"
+        "## Самочувствие\n"
+        "\n"
+        "-\n"
+        "\n"
+        "## Отчёт\n"
+        "\n"
+        "-\n"
         "\n"
         "## Привычки\n"
         "\n"
@@ -460,10 +476,6 @@ def _signed_or_dash(v: int | None) -> str:
     return str(v)
 
 
-def _int_or_dash(v: int | None) -> str:
-    return "—" if v is None else str(v)
-
-
 def _float_or_dash(v: float | None) -> str:
     if v is None:
         return "—"
@@ -472,13 +484,26 @@ def _float_or_dash(v: float | None) -> str:
     return f"{v:g}"
 
 
-def render_wellbeing_section(data: WellbeingData) -> str:
-    """Return the body of `## Самочувствие` (leading + trailing `\\n` for upsert)."""
+def render_state_section(snapshots: list[StateSnapshot]) -> str:
+    """Return the body of `## Самочувствие` — one timestamped line per /state run.
+
+    No averaging: each snapshot is its own line. An empty list renders a single
+    `-` placeholder so the section is never blank.
+    """
+    if not snapshots:
+        return "\n-\n"
     lines = [
-        f"- Настроение: {_signed_or_dash(data.mood)}",
-        f"- Тревога: {_int_or_dash(data.anxiety)}",
-        f"- Раздражительность: {_int_or_dash(data.irritability)}",
-        f"- Аппетит: {_signed_or_dash(data.appetite)}",
+        f"- {s.time_label} — настроение: {_signed_or_dash(s.mood)}, "
+        f"энергия: {_signed_or_dash(s.energy)}, аппетит: {_signed_or_dash(s.appetite)}"
+        for s in snapshots
+    ]
+    body = "\n".join(lines)
+    return f"\n{body}\n"
+
+
+def render_report_section(data: ReportData) -> str:
+    """Return the body of `## Отчёт` (leading + trailing `\\n` for upsert)."""
+    lines = [
         f"- Сон (ч): {_float_or_dash(data.sleep_hours)}",
     ]
     if data.include_weight:

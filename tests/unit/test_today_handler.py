@@ -4,8 +4,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from freezegun import freeze_time
 
+from datetime import datetime
+
 from rutix.bot.handlers.today import cmd_today
-from rutix.db.models import MoodEntry
+from rutix.db.models import MoodEntry, StateEntry
 from rutix.integrations.github import FileContent
 
 
@@ -31,14 +33,17 @@ def fake_message():
 
 
 @freeze_time("2026-05-14 12:00:00", tz_offset=3)
-async def test_today_shows_mood_and_meals(fake_message, fake_settings, fake_github, session):
+async def test_today_shows_state_and_report_and_meals(
+    fake_message, fake_settings, fake_github, session
+):
+    session.add(MoodEntry(day=date(2026, 5, 14), sleep_hours=7.5))
     session.add(
-        MoodEntry(
+        StateEntry(
             day=date(2026, 5, 14),
+            ts=datetime(2026, 5, 14, 9, 15),
             mood=1,
-            anxiety=0,
-            irritability=0,
-            sleep_hours=7.5,
+            energy=0,
+            appetite=1,
         )
     )
     await session.commit()
@@ -79,13 +84,14 @@ async def test_today_shows_mood_and_meals(fake_message, fake_settings, fake_gith
     )
 
     reply = fake_message.answer.call_args.args[0]
-    assert "+1" in reply or "1" in reply  # mood
-    assert "7.5" in reply
+    assert "09:15" in reply  # state snapshot time
+    assert "+1" in reply  # mood
+    assert "7.5" in reply  # report sleep
     assert "200" in reply  # kcal
 
 
 @freeze_time("2026-05-14 12:00:00", tz_offset=3)
-async def test_today_when_no_mood_entry(fake_message, fake_settings, fake_github, session):
+async def test_today_when_no_entries(fake_message, fake_settings, fake_github, session):
     daily = "## Питание\n\n| Приём | Что | Ккал | Б | Ж | У |\n|---|---|---|---|---|---|\n|  |  |  |  |  |  |\n| **Итого** |  |  |  |  |  |\n\n## Что сделано\n-\n## Заметки\n-\n"
     fake_github.read.return_value = FileContent(text=daily, sha="x")
 
@@ -109,4 +115,5 @@ async def test_today_when_no_mood_entry(fake_message, fake_settings, fake_github
     )
 
     reply = fake_message.answer.call_args.args[0]
-    assert "не делал" in reply.lower() or "/track" in reply.lower()
+    assert "/state" in reply.lower()
+    assert "/report" in reply.lower()

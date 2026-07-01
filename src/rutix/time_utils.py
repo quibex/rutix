@@ -66,7 +66,7 @@ def days_of_week(any_day_of_week: date) -> list[date]:
     return [monday + timedelta(days=i) for i in range(7)]
 
 
-# --- Free-text hour parser (for /track VPN/English) -------------------------
+# --- Free-text hour parser (for /report sleep/VPN/English) ------------------
 
 _WORD_HOURS = {
     "полтора": 1.5,
@@ -90,7 +90,7 @@ _MINUTES_RE = re.compile(
 
 
 # A day holds 24 hours — anything above this is not a duration-in-a-day but a
-# misrouted reply (e.g. a "45"-minute med snooze typed while /track was still
+# misrouted reply (e.g. a "45"-minute med snooze typed while /report was still
 # waiting on the English step). Reject it so it can't be recorded as 45ч.
 MAX_HOURS_IN_DAY = 24.0
 

@@ -7,7 +7,7 @@
 - daily_plan_ping (09:00): post today's `## 🗓 План на день` to the user.
 - med_reminder_tick (every minute): per-pill reminder — fires for meds whose
   `reminder_time` matches the current minute. Silent unless something is due.
-- evening_ping (21:00): nudge user to /track if they haven't yet
+- evening_ping (21:00): nudge user to /report if they haven't yet
 """
 
 import logging
@@ -32,7 +32,7 @@ from rutix.time_utils import subjective_today, yesterday_of
 
 logger = logging.getLogger(__name__)
 
-EVENING_PING_TEXT = "🌙 Напоминаю: вы ещё не делали /track за сегодня.\nЗаймёт минуту."
+EVENING_PING_TEXT = "🌙 Напоминаю: вы ещё не делали /report за сегодня.\nЗаймёт минуту."
 
 _MAX_MARKED_IN_MESSAGE = 15
 
@@ -180,15 +180,17 @@ async def send_evening_ping_if_needed(
     telegram_user_id: int,
     tz: str,
 ) -> bool:
-    """Send a /track reminder unless today's MoodEntry already has a mood value.
+    """Send a /report reminder unless today's report is already started.
+
+    "Started" is keyed off MoodEntry.sleep_hours — the first thing /report asks.
 
     Returns True if a message was sent, False if skipped.
     """
     today = subjective_today(datetime.now(ZoneInfo(tz)), tz)
     async with session_factory() as session:
         entry = await session.get(MoodEntry, today)
-    if entry is not None and entry.mood is not None:
-        logger.info("evening_ping skipped — mood already tracked for %s", today)
+    if entry is not None and entry.sleep_hours is not None:
+        logger.info("evening_ping skipped — report already done for %s", today)
         return False
 
     await bot.send_message(chat_id=telegram_user_id, text=EVENING_PING_TEXT)

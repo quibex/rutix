@@ -1,10 +1,13 @@
 """SQLAlchemy 2.x models for Phase 1.
 
 Tables:
-- mood_entries:    one row per day, current week only (purged after Sunday flush)
-- medication_log:  med-taken flags per (day, med_key), current week only
+- state_entries:   subjective-state snapshots (mood/energy/appetite), many/day (/state)
+- mood_entries:    daily report buffer (sleep/vpn/eng/weight), one row per day (/report)
+- medication_log:  med-taken flags per (day, med_key)
 - meds_active:     active medication protocol (persistent, archived rows kept)
 - flush_log:       what's been flushed to git (persistent)
+
+SQLite is a write buffer; flush_day materialises these into the daily .md file.
 """
 
 from datetime import date, datetime
@@ -36,6 +39,21 @@ class MoodEntry(Base):
         server_default=func.current_timestamp(),
         onupdate=func.current_timestamp(),
     )
+
+
+class StateEntry(Base):
+    """One subjective-state snapshot. Multiple rows per day — /state can be run
+    morning, noon, evening. flush_day renders them as timestamped lines in the
+    daily file's `## Самочувствие` section. No averaging."""
+
+    __tablename__ = "state_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    day: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    ts: Mapped[datetime] = mapped_column(DateTime, nullable=False)  # local wall-clock
+    mood: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    energy: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    appetite: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class MedicationLog(Base):
