@@ -8,6 +8,7 @@ from rutix.bot.handlers.note_done import (
     cmd_done,
     cmd_note,
     msg_await_text,
+    msg_freeform_note,
 )
 from rutix.integrations.github import FileContent
 
@@ -164,6 +165,26 @@ async def test_msg_await_text_empty_does_nothing(
 
     fake_github.write.assert_not_called()
     fake_state.clear.assert_awaited()
+
+
+async def test_msg_freeform_note_appends_to_notes(fake_message, fake_settings, fake_github):
+    """Plain text (no command, no active state) goes straight into ## Заметки."""
+    fake_message.text = "зайбал"
+
+    await msg_freeform_note(fake_message, settings=fake_settings, github=fake_github)
+
+    written = fake_github.write.call_args.args[1]
+    notes = written.split("## Заметки", 1)[1]
+    assert "- existing note" in notes
+    assert "- зайбал" in notes
+
+
+async def test_msg_freeform_note_ignores_commands(fake_message, fake_settings, fake_github):
+    fake_message.text = "/unknown"
+
+    await msg_freeform_note(fake_message, settings=fake_settings, github=fake_github)
+
+    fake_github.write.assert_not_called()
 
 
 async def test_cb_cancel_clears_state():

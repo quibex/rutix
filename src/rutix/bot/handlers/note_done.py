@@ -12,7 +12,7 @@ from typing import Callable
 from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
@@ -139,3 +139,20 @@ async def msg_await_text(
         await message.answer("Пустой текст. Отменено.")
         return
     await _write_entry(message, settings, github, cmd_name, text)
+
+
+@router.message(StateFilter(None), F.text)
+async def msg_freeform_note(
+    message: Message,
+    settings: Settings,
+    github: GitHubClient,
+):
+    """Plain text without a command goes straight into today's ## Заметки.
+
+    Registered LAST (this router is included last) so it only catches text that
+    no command/state handler claimed — commands and empty text are ignored.
+    """
+    text = (message.text or "").strip()
+    if not text or text.startswith("/"):
+        return
+    await _write_entry(message, settings, github, "note", text)
