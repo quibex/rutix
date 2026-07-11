@@ -7,7 +7,6 @@
 - daily_plan_ping (09:00): post today's `## 🗓 План на день` to the user.
 - med_reminder_tick (every minute): per-pill reminder — fires for meds whose
   `reminder_time` matches the current minute. Silent unless something is due.
-- evening_ping (21:00): nudge user to /report if they haven't yet
 """
 
 import logging
@@ -19,7 +18,6 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from rutix.db.models import MoodEntry
 from rutix.integrations.claude import ClaudeClient
 from rutix.integrations.github import GitHubClient
 from rutix.integrations.todoist import TodoistClient
@@ -31,8 +29,6 @@ from rutix.jobs.update_habits import UpdateHabitsResult, update_habits
 from rutix.time_utils import subjective_today, yesterday_of
 
 logger = logging.getLogger(__name__)
-
-EVENING_PING_TEXT = "🌙 Напоминаю: вы ещё не делали /report за сегодня.\nЗаймёт минуту."
 
 _MAX_MARKED_IN_MESSAGE = 15
 
@@ -174,30 +170,6 @@ def build_3am_summary(
     return "\n".join(lines)
 
 
-async def send_evening_ping_if_needed(
-    session_factory: async_sessionmaker[AsyncSession],
-    bot: Bot,
-    telegram_user_id: int,
-    tz: str,
-) -> bool:
-    """Send a /report reminder unless today's report is already started.
-
-    "Started" is keyed off MoodEntry.sleep_hours — the first thing /report asks.
-
-    Returns True if a message was sent, False if skipped.
-    """
-    today = subjective_today(datetime.now(ZoneInfo(tz)), tz)
-    async with session_factory() as session:
-        entry = await session.get(MoodEntry, today)
-    if entry is not None and entry.sleep_hours is not None:
-        logger.info("evening_ping skipped — report already done for %s", today)
-        return False
-
-    await bot.send_message(chat_id=telegram_user_id, text=EVENING_PING_TEXT)
-    logger.info("evening_ping sent for %s", today)
-    return True
-
-
 def make_scheduler(
     session_factory: async_sessionmaker[AsyncSession],
     github: GitHubClient,
@@ -286,12 +258,6 @@ def make_scheduler(
         except Exception:
             logger.exception("med_reminder_tick failed")
 
-    async def evening_ping():
-        try:
-            await send_evening_ping_if_needed(session_factory, bot, telegram_user_id, tz)
-        except Exception:
-            logger.exception("evening_ping failed")
-
     scheduler.add_job(
         daily_3am,
         trigger=CronTrigger(hour=3, minute=0, timezone=ZoneInfo(tz)),
@@ -322,12 +288,6 @@ def make_scheduler(
         med_reminder,
         trigger=CronTrigger(minute="*", timezone=ZoneInfo(tz)),
         id="med_reminder_tick",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        evening_ping,
-        trigger=CronTrigger(hour=21, minute=0, timezone=ZoneInfo(tz)),
-        id="evening_ping",
         replace_existing=True,
     )
     return scheduler
