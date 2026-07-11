@@ -55,7 +55,6 @@ The GitHub `Contents API` writes are atomic per file: `read()` returns text + SH
 - `update_habits_retry` (06:00, 08:00) — catch-up for Todoist outages.
 - `daily_plan_ping` (09:00) → reads `## 🗓 План на день` from today's daily file and posts it.
 - `med_reminder_tick` (every minute) — fires for active meds whose `reminder_time` matches now.
-- `evening_ping` (21:00) — nudges to `/track` if not done.
 
 `/sync` is a manual trigger that calls only `flush_day` for yesterday.
 
