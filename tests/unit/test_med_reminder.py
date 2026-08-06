@@ -7,10 +7,12 @@ from freezegun import freeze_time
 from rutix.db.models import MedActive, MedicationLog
 from rutix.jobs.med_reminder import (
     ALL_DONE_TEXT,
+    CATCH_UP_HEADER,
     CB_PREFIX,
     REMINDER_HEADER,
     build_reminder_keyboard,
     build_reminder_text,
+    catch_up_after_tz_change,
     due_active_meds,
     med_reminder_tick,
     parse_reminder_time,
@@ -101,9 +103,7 @@ async def test_due_excludes_meds_without_reminder_time(session):
 
 
 async def test_due_excludes_archived(session):
-    await _add_med(
-        session, "old", reminder_time="09:00", archived=date(2026, 4, 1)
-    )
+    await _add_med(session, "old", reminder_time="09:00", archived=date(2026, 4, 1))
     due = await due_active_meds(session, date(2026, 5, 23), "09:00")
     assert due == []
 
@@ -126,12 +126,8 @@ async def test_due_includes_meds_with_log_taken_false(session):
 
 
 async def test_due_batches_when_two_meds_share_time(session):
-    await _add_med(
-        session, "first", "Первый", reminder_time="09:00", started=date(2026, 1, 1)
-    )
-    await _add_med(
-        session, "second", "Второй", reminder_time="09:00", started=date(2026, 2, 1)
-    )
+    await _add_med(session, "first", "Первый", reminder_time="09:00", started=date(2026, 1, 1))
+    await _add_med(session, "second", "Второй", reminder_time="09:00", started=date(2026, 2, 1))
     due = await due_active_meds(session, date(2026, 5, 23), "09:00")
     assert [m.key for m in due] == ["first", "second"]
 
@@ -219,12 +215,8 @@ async def test_tick_silent_when_med_already_taken_today(fake_bot, session):
 
 @freeze_time("2026-05-23 06:00:00")  # 09:00 MSK
 async def test_tick_batches_meds_sharing_a_minute(fake_bot, session):
-    await _add_med(
-        session, "first", "Первый", reminder_time="09:00", started=date(2026, 1, 1)
-    )
-    await _add_med(
-        session, "second", "Второй", reminder_time="09:00", started=date(2026, 2, 1)
-    )
+    await _add_med(session, "first", "Первый", reminder_time="09:00", started=date(2026, 1, 1))
+    await _add_med(session, "second", "Второй", reminder_time="09:00", started=date(2026, 2, 1))
     sent = await med_reminder_tick(
         _session_factory(session), fake_bot, telegram_user_id=42, tz="Europe/Moscow"
     )
@@ -248,3 +240,83 @@ async def test_tick_uses_subjective_today(fake_bot, session):
 
 def test_all_done_text_constant():
     assert "✅" in ALL_DONE_TEXT
+
+
+# catch_up_after_tz_change
+#
+# med_reminder_tick only fires on an exact HH:MM match, so moving east skips
+# every reminder in the interval the local clock jumped over. 02:40 UTC is
+# 05:40 in Moscow and 08:40 in Bishkek — the real +3 move that motivated this.
+
+_MOVE_EAST = {"old_tz": "Europe/Moscow", "new_tz": "Asia/Bishkek"}
+
+
+@freeze_time("2026-08-06 02:40:00")  # 05:40 MSK / 08:40 Bishkek
+async def test_catch_up_replays_reminder_the_shift_jumped_over(session, fake_bot):
+    await _add_med(session, "seizar", name="Сейзар", reminder_time="08:00")
+
+    sent = await catch_up_after_tz_change(_session_factory(session), fake_bot, 1, **_MOVE_EAST)
+
+    assert [m.key for m in sent] == ["seizar"]
+    text = fake_bot.send_message.call_args.kwargs["text"]
+    assert text.startswith(CATCH_UP_HEADER)
+    assert "Сейзар" in text
+
+
+@freeze_time("2026-08-06 02:40:00")  # 05:40 MSK / 08:40 Bishkek
+async def test_catch_up_skips_meds_already_announced_in_the_old_zone(session, fake_bot):
+    """05:00 had already fired at 05:00 MSK before the move — re-sending it
+    would nag about a reminder the user has already seen and ignored."""
+    await _add_med(session, "early", reminder_time="05:00")
+
+    assert (
+        await catch_up_after_tz_change(_session_factory(session), fake_bot, 1, **_MOVE_EAST) == []
+    )
+    fake_bot.send_message.assert_not_awaited()
+
+
+@freeze_time("2026-08-06 02:40:00")  # 05:40 MSK / 08:40 Bishkek
+async def test_catch_up_skips_meds_still_ahead_in_the_new_zone(session, fake_bot):
+    """23:00 is still in the future locally — the normal tick will get it."""
+    await _add_med(session, "atarax", reminder_time="23:00")
+
+    assert (
+        await catch_up_after_tz_change(_session_factory(session), fake_bot, 1, **_MOVE_EAST) == []
+    )
+    fake_bot.send_message.assert_not_awaited()
+
+
+@freeze_time("2026-08-06 02:40:00")  # 05:40 MSK / 08:40 Bishkek
+async def test_catch_up_skips_already_taken_meds(session, fake_bot):
+    await _add_med(session, "seizar", reminder_time="08:00")
+    session.add(MedicationLog(day=date(2026, 8, 6), med_key="seizar", taken=True))
+    await session.commit()
+
+    assert (
+        await catch_up_after_tz_change(_session_factory(session), fake_bot, 1, **_MOVE_EAST) == []
+    )
+    fake_bot.send_message.assert_not_awaited()
+
+
+@freeze_time("2026-08-06 02:40:00")  # 08:40 Bishkek / 05:40 MSK
+async def test_catch_up_sends_nothing_when_moving_west(session, fake_bot):
+    """Moving west rewinds the local clock — nothing was skipped, and the
+    reminders ahead will fire normally."""
+    await _add_med(session, "seizar", reminder_time="08:00")
+
+    sent = await catch_up_after_tz_change(
+        _session_factory(session), fake_bot, 1, old_tz="Asia/Bishkek", new_tz="Europe/Moscow"
+    )
+
+    assert sent == []
+    fake_bot.send_message.assert_not_awaited()
+
+
+@freeze_time("2026-08-06 02:40:00")
+async def test_catch_up_ignores_meds_without_a_reminder(session, fake_bot):
+    await _add_med(session, "no_reminder", reminder_time=None)
+
+    assert (
+        await catch_up_after_tz_change(_session_factory(session), fake_bot, 1, **_MOVE_EAST) == []
+    )
+    fake_bot.send_message.assert_not_awaited()

@@ -30,6 +30,7 @@ from rutix.time_utils import subjective_today
 logger = logging.getLogger(__name__)
 
 REMINDER_HEADER = "💊 Не забудь принять:"
+CATCH_UP_HEADER = "💊 Пропущено из-за смены часового пояса:"
 ALL_DONE_TEXT = "✅ Все препараты приняты."
 
 CB_PREFIX = "med_taken"
@@ -106,9 +107,9 @@ async def untaken_active_meds(session: AsyncSession, day: date) -> list[MedActiv
     return [m for m in active if m.key not in taken_keys]
 
 
-def build_reminder_text(meds: list[MedActive]) -> str:
+def build_reminder_text(meds: list[MedActive], header: str = REMINDER_HEADER) -> str:
     """Bullet-list of meds with current dose. Caller guarantees non-empty."""
-    lines = [REMINDER_HEADER]
+    lines = [header]
     for m in meds:
         lines.append(f"• {m.name} — {m.current_dose} мг")
     return "\n".join(lines)
@@ -215,6 +216,58 @@ async def _fire_due_snoozes(
         ", ".join(m.key for m in meds_to_send),
     )
     return True
+
+
+async def catch_up_after_tz_change(
+    session_factory: async_sessionmaker[AsyncSession],
+    bot: Bot,
+    telegram_user_id: int,
+    old_tz: str,
+    new_tz: str,
+) -> list[MedActive]:
+    """Re-send reminders the timezone shift jumped over. Returns what was sent.
+
+    `med_reminder_tick` only fires on an exact HH:MM match, so moving east
+    (local clock jumps forward) skips every reminder in the interval it passed
+    through — move at 05:40 MSK to 08:40 Bishkek and an 08:00 pill is simply
+    never announced that day.
+
+    Only meds in the half-open window `(old local time, new local time]` are
+    replayed: those are exactly the ones neither timezone announced. Meds whose
+    time had already passed in the *old* zone were announced then and are not
+    nudged again. Moving west skips nothing, so nothing is sent.
+    """
+    now = datetime.now(ZoneInfo(new_tz))
+    old_hh_mm = datetime.now(ZoneInfo(old_tz)).strftime("%H:%M")
+    new_hh_mm = now.strftime("%H:%M")
+    # Moved west (or across midnight, where a wall-clock comparison is
+    # meaningless) — nothing was skipped. Under-firing beats double-nudging.
+    if new_hh_mm <= old_hh_mm:
+        return []
+
+    day = subjective_today(now, new_tz)
+    async with session_factory() as session:
+        meds = [
+            m
+            for m in await pending_reminder_meds(session, day)
+            if m.reminder_time and old_hh_mm < m.reminder_time <= new_hh_mm
+        ]
+        if not meds:
+            return []
+        await bot.send_message(
+            chat_id=telegram_user_id,
+            text=build_reminder_text(meds, header=CATCH_UP_HEADER),
+            reply_markup=build_reminder_keyboard(day, meds),
+        )
+    logger.info(
+        "tz change %s -> %s: replayed %d skipped reminder(s) in (%s, %s]",
+        old_tz,
+        new_tz,
+        len(meds),
+        old_hh_mm,
+        new_hh_mm,
+    )
+    return meds
 
 
 async def med_reminder_tick(

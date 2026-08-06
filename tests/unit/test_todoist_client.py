@@ -483,3 +483,73 @@ async def test_skips_events_with_missing_extra_data(client):
     titles = await client.completed_titles_for_day(date(2026, 5, 14))
     assert titles == {"📚 Anki"}
     await client.aclose()
+
+
+# --- get_user_timezone -----------------------------------------------------
+#
+# This is the bot's travel detection: the Todoist app rewrites the account
+# timezone when the phone moves, so reading it back keeps every cron and med
+# reminder on local time without the user doing anything.
+
+
+def _sync_route():
+    return respx.post("https://api.todoist.com/api/v1/sync")
+
+
+@respx.mock
+async def test_get_user_timezone_reads_tz_info(client):
+    _sync_route().mock(
+        return_value=httpx.Response(
+            200,
+            json={"user": {"tz_info": {"timezone": "Asia/Bishkek", "gmt_string": "+06:00"}}},
+        )
+    )
+    assert await client.get_user_timezone() == "Asia/Bishkek"
+    await client.aclose()
+
+
+@respx.mock
+async def test_get_user_timezone_falls_back_to_flat_field(client):
+    """Alternate payload shape puts a bare IANA string on the user object."""
+    _sync_route().mock(return_value=httpx.Response(200, json={"user": {"timezone": "Asia/Almaty"}}))
+    assert await client.get_user_timezone() == "Asia/Almaty"
+    await client.aclose()
+
+
+@respx.mock
+async def test_get_user_timezone_requests_only_the_user_resource(client):
+    route = _sync_route().mock(
+        return_value=httpx.Response(200, json={"user": {"tz_info": {"timezone": "UTC"}}})
+    )
+    await client.get_user_timezone()
+    body = route.calls[0].request.content.decode()
+    assert "sync_token=%2A" in body  # "*"
+    assert "user" in body
+    await client.aclose()
+
+
+@respx.mock
+async def test_get_user_timezone_rejects_non_iana_value(client):
+    """`gmt_string`-style offsets (or anything else ZoneInfo can't resolve)
+    must not reach the scheduler — a bad zone would break every cron."""
+    _sync_route().mock(
+        return_value=httpx.Response(200, json={"user": {"tz_info": {"timezone": "+06:00"}}})
+    )
+    assert await client.get_user_timezone() is None
+    await client.aclose()
+
+
+@respx.mock
+async def test_get_user_timezone_returns_none_on_missing_user(client):
+    _sync_route().mock(return_value=httpx.Response(200, json={}))
+    assert await client.get_user_timezone() is None
+    await client.aclose()
+
+
+@respx.mock
+async def test_get_user_timezone_swallows_http_errors(client):
+    """A Todoist outage must leave the current timezone alone, not crash the
+    hourly cron."""
+    _sync_route().mock(return_value=httpx.Response(500, json={"error": "boom"}))
+    assert await client.get_user_timezone() is None
+    await client.aclose()
