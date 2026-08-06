@@ -55,12 +55,31 @@ The GitHub `Contents API` writes are atomic per file: `read()` returns text + SH
 - `update_habits_retry` (06:00, 08:00) — catch-up for Todoist outages.
 - `daily_plan_ping` (09:00) → reads `## 🗓 План на день` from today's daily file and posts it.
 - `med_reminder_tick` (every minute) — fires for active meds whose `reminder_time` matches now.
+- `tz_sync` (hourly at :07) — pulls the timezone from Todoist. Silent unless it moved.
 
 `/sync` is a manual trigger that calls only `flush_day` for yesterday.
+
+Cron triggers are registered in the *current* timezone and re-registered when it changes — a `CronTrigger`'s timezone is frozen at `add_job` time. `make_scheduler` builds them all from one `_CronJob` list and the `on_tz_change` hook re-points them from that same list, so the add path and the reschedule path can't drift apart.
 
 ### Subjective day (3am boundary)
 
 [src/rutix/time_utils.py](src/rutix/time_utils.py): `subjective_today()` returns yesterday if local time is before 03:00. Every handler that needs "today" should use this — not `date.today()`. This is why the daily flush runs at 03:00: by then, the subjective day has rolled over and the previous day is sealed.
+
+### The timezone moves at runtime — never cache it
+
+The user travels, so `TZ` env is only a **seed**. [src/rutix/tz_manager.py](src/rutix/tz_manager.py) owns the live value: `load()` reads it from the `user_prefs` row (seeding from `TZ` on first run) before the scheduler is built, and the hourly `tz_sync` cron reads the Todoist account profile — the Todoist app rewrites it when the phone changes zones — and applies any move.
+
+Applying a move has to reach three places that cached the old value:
+
+1. `Settings.tz` — mutated in place, so all ~17 `settings.tz` reads in handlers pick it up without threading a provider through every call site.
+2. `TodoistClient.tz` — its subjective-day window for the Activity Log.
+3. The APScheduler cron triggers, via subscriber hooks (`TimezoneManager.subscribe`).
+
+Consequences for new code:
+
+- Jobs must read the tz through `tz_manager.tz` at call time. A closure over a `tz: str` parameter goes stale the moment the user moves — that's exactly the bug this fixed.
+- `TodoistClient.get_user_timezone()` returns `None` (never raises) on any transport error, odd payload shape, or non-IANA value — `tz_info` also carries a `gmt_string` like `+06:00`, and a bad zone reaching a `CronTrigger` would break every job. A zone we can't trust must not replace a working one.
+- Reminder times are wall-clock: `reminder_time="08:00"` means 8am wherever the user is, so a move re-points it rather than shifting the string — `meds_active` needs no migration. Moving east makes the local clock jump over reminders that `med_reminder_tick` (exact HH:MM match) would then never fire, so `catch_up_after_tz_change` replays exactly the `(old local time, new local time]` window. Moving west skips nothing and sends nothing.
 
 ### Dependency injection via aiogram Dispatcher dict
 
@@ -90,7 +109,7 @@ The system prompt (eat.md + reference.md) carries `cache_control: ephemeral` —
 
 ## Conventions
 
-- `subjective_today(now, tz)` everywhere — never `date.today()`.
+- `subjective_today(now, tz)` everywhere — never `date.today()`. In handlers the tz is `settings.tz`; in jobs read it from `tz_manager` per run, never from a captured variable.
 - Use the dispatcher kwargs (`session_factory`, `github`, `claude`, `todoist`, `settings`) — don't import the singletons.
 - Github commit messages in handlers/jobs follow `<area>(<scope>): <ru text>` (e.g. `eat(2026-05-17): 3 позиций`).
 - `MealItem.source` is `"reference"` or `"estimate"`; estimates get appended to `nutrition/reference.md` under `## Из бота` after `/eat ✅`.

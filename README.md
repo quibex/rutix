@@ -324,7 +324,7 @@ sudo chown deploy:deploy /opt/rutix
 |------|-------|
 | `TELEGRAM_USER_ID` | Your numeric Telegram ID (use [@userinfobot](https://t.me/userinfobot)) |
 | `LIFE_REPO` | `quibex/life` |
-| `TZ` | `Europe/Moscow` |
+| `TZ` | `Europe/Moscow` — seed only; see [Timezone](#timezone-follows-you) |
 
 #### Environment (Settings → Environments → New environment)
 
@@ -371,7 +371,29 @@ In Telegram with your bot:
 
 Every push to `main` deploys automatically. Cron jobs (`flush_day`,
 `update_habits`, `flush_week`) re-register on every container restart — they
-fire at 03:00 MSK regardless of when you redeploy.
+fire at 03:00 local time regardless of when you redeploy.
+
+### Timezone follows you
+
+Everything time-shaped in the bot — the 03:00 flush, the 09:00 plan ping, and
+every med `reminder_time` — runs in one timezone. Move to another one and the
+whole schedule silently shifts by the offset difference: reminders keep firing,
+just at the wrong local hour.
+
+So the bot tracks the move on its own. Once an hour it reads the timezone from
+your **Todoist account profile** (the Todoist mobile app updates it when your
+phone changes zones) and, if it moved, re-registers every cron in the new zone,
+writes it to `user_prefs`, and tells you in Telegram. Nothing to run.
+
+Reminder times are wall-clock, not instants: a med set to `08:00` means 8 in
+the morning wherever you are, so a move re-points it at the new local 08:00.
+Reminders the jump skipped past (moving east, the clock leaps forward over
+them) are replayed once, labelled as such.
+
+`TZ` in the environment is only the **seed** — read once, on the very first
+start, to create the `user_prefs` row. After that the stored value wins, so a
+redeploy never snaps you back to Moscow. It's also the fallback the bot keeps
+running on if Todoist is unreachable at startup.
 
 ### Backup (optional, not implemented)
 
@@ -390,5 +412,6 @@ add backup later:
 - **`deploy` job fails with "Bot container was not created"** → `docker compose pull` likely failed. Check that the GHCR image is public (`gh api orgs/quibex/packages/container/rutix --jq .visibility` or repo Settings → Packages → make public).
 - **Bot starts but `/track` does nothing** → `TELEGRAM_USER_ID` mismatch. Whitelist middleware silently drops everything else. Check `docker compose logs bot` for "rutix starting (user_id=...)".
 - **`/eat` fails with FileNotFoundError on `prompts/eat.md`** → Image was built before Phase 3 fix. Trigger a rebuild: `gh workflow run prod.yml`.
-- **Cron at 03:00 MSK didn't fire** → Container TZ. Verify with `docker compose exec bot date` — should print MSK time.
+- **Cron at 03:00 didn't fire** → Check the *effective* timezone, not the container's: `docker compose logs bot | grep "rutix timezone"`. It comes from `user_prefs`, not `TZ` — see [Timezone](#timezone-follows-you).
+- **Reminders arrive N hours off after a trip** → The Todoist profile timezone is stale (open the Todoist app on the phone so it re-syncs), or the hourly `tz_sync` cron is erroring. `docker compose logs bot | grep "tz:"` shows every detected change and every failed lookup.
 - **Activity Log returns 403 on habit update** → Todoist Pro not active. Either subscribe or accept that recurring task tracking won't work until you do.

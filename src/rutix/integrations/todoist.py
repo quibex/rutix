@@ -188,6 +188,48 @@ class TodoistClient:
         )
         return {ev["object_id"] for ev in events if ev.get("object_id")}
 
+    async def get_user_timezone(self) -> str | None:
+        """The IANA timezone from the Todoist account profile, or None.
+
+        This is the bot's automatic travel detection: the Todoist mobile app
+        updates the account timezone when the phone changes zones, so reading
+        it back means the user never has to tell the bot they moved.
+
+        Fetched via the Sync API (`resource_types=["user"]`), which returns the
+        timezone under `user.tz_info.timezone`; older/alternate payload shapes
+        put a bare IANA string in `user.timezone`, so both are accepted.
+
+        Returns None — never raises — on any transport error, unexpected payload
+        shape, or a value that isn't a real IANA zone. A timezone we can't trust
+        must not clobber a working schedule, so the caller keeps the current one.
+        """
+        try:
+            r = await self._request_with_retry(
+                "POST",
+                "/api/v1/sync",
+                data={"sync_token": "*", "resource_types": '["user"]'},
+            )
+            r.raise_for_status()
+            user = r.json().get("user") or {}
+        except Exception:
+            logger.exception("todoist: failed to fetch user timezone")
+            return None
+
+        raw = (user.get("tz_info") or {}).get("timezone") or user.get("timezone")
+        if not isinstance(raw, str) or not raw.strip():
+            logger.warning("todoist: user payload carried no timezone")
+            return None
+        name = raw.strip()
+
+        # tz_info also carries a `gmt_string` like "+06:00" — guard against that
+        # (and any other non-IANA value) landing in a ZoneInfo() at cron time.
+        try:
+            ZoneInfo(name)
+        except Exception:
+            logger.warning("todoist: %r is not a valid IANA timezone — ignoring", name)
+            return None
+        return name
+
     async def fetch_task(self, task_id: str) -> dict[str, Any] | None:
         """GET /api/v1/tasks/{id}. None on 404."""
         r = await self._request_with_retry("GET", f"/api/v1/tasks/{task_id}")

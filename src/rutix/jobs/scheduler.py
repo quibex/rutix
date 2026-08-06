@@ -7,10 +7,20 @@
 - daily_plan_ping (09:00): post today's `## 🗓 План на день` to the user.
 - med_reminder_tick (every minute): per-pill reminder — fires for meds whose
   `reminder_time` matches the current minute. Silent unless something is due.
+- tz_sync (hourly at :07): pulls the timezone from the Todoist profile so the
+  whole schedule follows the user when they travel. Silent unless it moves.
+
+Every cron below is registered in the *current* timezone rather than a fixed
+one. A `CronTrigger`'s timezone is frozen when the job is added, so a timezone
+change has to re-register them — the `on_tz_change` hook does that from the
+same `_CronJob` list used to add them, so the two can't drift apart.
 """
 
 import logging
+from collections.abc import Callable, Coroutine
+from dataclasses import dataclass, field
 from datetime import date, datetime
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot
@@ -23,14 +33,39 @@ from rutix.integrations.github import GitHubClient
 from rutix.integrations.todoist import TodoistClient
 from rutix.jobs.daily_plan import daily_plan_ping
 from rutix.jobs.flush_day import flush_day
-from rutix.jobs.med_reminder import med_reminder_tick
+from rutix.jobs.med_reminder import catch_up_after_tz_change, med_reminder_tick
 from rutix.jobs.reschedule_overdue import RescheduleResult, reschedule_overdue
 from rutix.jobs.update_habits import UpdateHabitsResult, update_habits
 from rutix.time_utils import subjective_today, yesterday_of
+from rutix.tz_manager import TimezoneManager
 
 logger = logging.getLogger(__name__)
 
 _MAX_MARKED_IN_MESSAGE = 15
+
+
+@dataclass(frozen=True)
+class _CronJob:
+    """A cron job's schedule, kept separate from the timezone it runs in so the
+    same spec can re-register the job when the timezone changes."""
+
+    job_id: str
+    func: Callable[..., Coroutine[Any, Any, None]]
+    hour: str | int
+    minute: str | int
+    kwargs: dict[str, Any] = field(default_factory=dict)
+
+    def trigger(self, tz: str) -> CronTrigger:
+        return CronTrigger(hour=self.hour, minute=self.minute, timezone=ZoneInfo(tz))
+
+
+def build_tz_change_message(old_tz: str, new_tz: str, now: datetime) -> str:
+    return (
+        f"🌍 Часовой пояс: {old_tz} → {new_tz}\n"
+        f"Определил по Todoist. Локальное время сейчас {now.strftime('%H:%M')}.\n"
+        "Напоминания и ночные джобы пересчитаны — время в них осталось прежним "
+        "(08:00 значит 8 утра там, где ты)."
+    )
 
 
 def _fmt_sha(sha: str | None) -> str:
@@ -177,11 +212,17 @@ def make_scheduler(
     claude: ClaudeClient,
     bot: Bot,
     telegram_user_id: int,
-    tz: str,
+    tz_manager: TimezoneManager,
 ) -> AsyncIOScheduler:
-    scheduler = AsyncIOScheduler(timezone=ZoneInfo(tz))
+    # Read through the manager on every run — `tz` is a snapshot that goes stale
+    # the moment the user travels, so jobs must never close over it.
+    def tz_now() -> str:
+        return tz_manager.tz
+
+    scheduler = AsyncIOScheduler(timezone=ZoneInfo(tz_now()))
 
     async def daily_3am():
+        tz = tz_now()
         today = subjective_today(datetime.now(ZoneInfo(tz)), tz)
         target = yesterday_of(today)
         logger.info("3am job running for target=%s today=%s", target, today)
@@ -225,6 +266,7 @@ def make_scheduler(
             logger.exception("failed to send 3am summary")
 
     async def update_habits_retry(is_final_attempt: bool):
+        tz = tz_now()
         today = subjective_today(datetime.now(ZoneInfo(tz)), tz)
         target = yesterday_of(today)
         logger.info(
@@ -248,46 +290,67 @@ def make_scheduler(
 
     async def daily_plan():
         try:
-            await daily_plan_ping(github, bot, telegram_user_id, tz)
+            await daily_plan_ping(github, bot, telegram_user_id, tz_now())
         except Exception:
             logger.exception("daily_plan_ping failed")
 
     async def med_reminder():
         try:
-            await med_reminder_tick(session_factory, bot, telegram_user_id, tz)
+            await med_reminder_tick(session_factory, bot, telegram_user_id, tz_now())
         except Exception:
             logger.exception("med_reminder_tick failed")
 
-    scheduler.add_job(
-        daily_3am,
-        trigger=CronTrigger(hour=3, minute=0, timezone=ZoneInfo(tz)),
-        id="daily_3am",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        update_habits_retry,
-        trigger=CronTrigger(hour=6, minute=0, timezone=ZoneInfo(tz)),
-        kwargs={"is_final_attempt": False},
-        id="update_habits_retry_06",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        update_habits_retry,
-        trigger=CronTrigger(hour=8, minute=0, timezone=ZoneInfo(tz)),
-        kwargs={"is_final_attempt": True},
-        id="update_habits_retry_08",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        daily_plan,
-        trigger=CronTrigger(hour=9, minute=0, timezone=ZoneInfo(tz)),
-        id="daily_plan_ping",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        med_reminder,
-        trigger=CronTrigger(minute="*", timezone=ZoneInfo(tz)),
-        id="med_reminder_tick",
-        replace_existing=True,
-    )
+    async def tz_sync():
+        """Hourly travel check. Silent unless the zone actually moved — the
+        change hook below does the rescheduling and the user-facing message."""
+        try:
+            await tz_manager.sync_from_todoist()
+        except Exception:
+            logger.exception("tz_sync failed")
+
+    cron_jobs = [
+        _CronJob("daily_3am", daily_3am, 3, 0),
+        _CronJob("update_habits_retry_06", update_habits_retry, 6, 0, {"is_final_attempt": False}),
+        _CronJob("update_habits_retry_08", update_habits_retry, 8, 0, {"is_final_attempt": True}),
+        _CronJob("daily_plan_ping", daily_plan, 9, 0),
+        # :07 rather than :00 so the travel check doesn't land on the same
+        # minute as the hour-aligned jobs above.
+        _CronJob("tz_sync", tz_sync, "*", 7),
+        _CronJob("med_reminder_tick", med_reminder, "*", "*"),
+    ]
+
+    for job in cron_jobs:
+        scheduler.add_job(
+            job.func,
+            trigger=job.trigger(tz_now()),
+            kwargs=job.kwargs,
+            id=job.job_id,
+            replace_existing=True,
+        )
+
+    async def on_tz_change(old_tz: str, new_tz: str) -> None:
+        # The scheduler-level timezone is only a default for triggers that omit
+        # one, and every trigger below sets it explicitly — so it needs no
+        # update here (and `scheduler.configure()` would raise anyway: it only
+        # accepts a stopped scheduler).
+        for spec in cron_jobs:
+            scheduler.reschedule_job(spec.job_id, trigger=spec.trigger(new_tz))
+        logger.info("tz: rescheduled %d cron job(s) into %s", len(cron_jobs), new_tz)
+
+        try:
+            await bot.send_message(
+                chat_id=telegram_user_id,
+                text=build_tz_change_message(old_tz, new_tz, datetime.now(ZoneInfo(new_tz))),
+            )
+        except Exception:
+            logger.exception("failed to send tz change message")
+
+        # Do this after the message so the catch-up reads as a consequence of
+        # the move rather than an unexplained reminder.
+        try:
+            await catch_up_after_tz_change(session_factory, bot, telegram_user_id, old_tz, new_tz)
+        except Exception:
+            logger.exception("med catch-up after tz change failed")
+
+    tz_manager.subscribe(on_tz_change)
     return scheduler

@@ -6,6 +6,7 @@ Tables:
 - medication_log:  med-taken flags per (day, med_key)
 - meds_active:     active medication protocol (persistent, archived rows kept)
 - flush_log:       what's been flushed to git (persistent)
+- user_prefs:      single-row runtime prefs — currently the timezone (persistent)
 
 SQLite is a write buffer; flush_day materialises these into the daily .md file.
 """
@@ -86,6 +87,28 @@ class MedSnooze(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     fire_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     med_keys: Mapped[str] = mapped_column(String, nullable=False)
+
+
+class UserPref(Base):
+    """Single-row (id=1) runtime preferences. Currently only the timezone.
+
+    The timezone lives in the DB rather than only in the `TZ` env var because
+    the user travels: the hourly Todoist sync rewrites it whenever they move,
+    and a restart must not snap the whole schedule back to the env default.
+    `TZ` stays the *seed* — read once, when this row doesn't exist yet — and
+    this row is the last-known-good fallback when Todoist is unreachable at
+    startup.
+    """
+
+    __tablename__ = "user_prefs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    tz: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.current_timestamp(),
+        onupdate=func.current_timestamp(),
+    )
 
 
 class FlushLog(Base):

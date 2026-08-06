@@ -13,6 +13,7 @@ from rutix.integrations.github import GitHubClient
 from rutix.integrations.todoist import TodoistClient
 from rutix.jobs.scheduler import make_scheduler
 from rutix.settings import load_settings
+from rutix.tz_manager import TimezoneManager
 
 
 def _setup_logging() -> None:
@@ -35,6 +36,14 @@ async def _run() -> None:
     claude = ClaudeClient(api_key=settings.anthropic_api_key)
     todoist = TodoistClient(token=settings.todoist_token, tz=settings.tz)
 
+    # Resolve the timezone before anything schedules against it: `load()` reads
+    # the stored zone (seeding it from TZ on first run) and points settings.tz
+    # at it, so handlers and cron triggers start in the user's current zone
+    # rather than the env default they were deployed with.
+    tz_manager = TimezoneManager(session_factory, settings, todoist)
+    await tz_manager.load()
+    log.info("rutix timezone: %s", tz_manager.tz)
+
     bot = build_bot(settings.bot_token)
     dp = build_dispatcher(allowed_user_id=settings.telegram_user_id)
     dp["session_factory"] = session_factory
@@ -49,9 +58,16 @@ async def _run() -> None:
     # and /report resumes from the first unanswered step.
     notifier = Notifier(bot, dp.storage, settings.telegram_user_id)
     scheduler = make_scheduler(
-        session_factory, github, todoist, claude, notifier, settings.telegram_user_id, settings.tz
+        session_factory, github, todoist, claude, notifier, settings.telegram_user_id, tz_manager
     )
     scheduler.start()
+
+    # Catch a move that happened while the bot was down — the hourly cron would
+    # otherwise leave the schedule wrong until the next :07.
+    try:
+        await tz_manager.sync_from_todoist()
+    except Exception:
+        log.exception("initial timezone sync failed")
 
     await bot.set_my_commands(BOT_COMMANDS)
     log.info("registered %d bot commands in /-menu", len(BOT_COMMANDS))
