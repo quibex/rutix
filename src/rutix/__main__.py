@@ -11,6 +11,7 @@ from rutix.db.engine import make_engine, make_session_factory
 from rutix.integrations.claude import ClaudeClient
 from rutix.integrations.github import GitHubClient
 from rutix.integrations.todoist import TodoistClient
+from rutix.jobs.job_prefs import JobPrefsManager
 from rutix.jobs.scheduler import make_scheduler
 from rutix.settings import load_settings
 from rutix.tz_manager import TimezoneManager
@@ -44,6 +45,12 @@ async def _run() -> None:
     await tz_manager.load()
     log.info("rutix timezone: %s", tz_manager.tz)
 
+    # Same deal for the schedule itself: the cron times in JOB_SPECS are only
+    # defaults, and whatever the user set from /schedule has to be in memory
+    # before the jobs are registered.
+    job_prefs = JobPrefsManager(session_factory)
+    await job_prefs.load()
+
     bot = build_bot(settings.bot_token)
     dp = build_dispatcher(allowed_user_id=settings.telegram_user_id)
     dp["session_factory"] = session_factory
@@ -51,6 +58,7 @@ async def _run() -> None:
     dp["claude"] = claude
     dp["todoist"] = todoist
     dp["settings"] = settings
+    dp["job_prefs"] = job_prefs
 
     # Cron jobs send via a Notifier so any standalone message (med reminder,
     # evening ping, …) cancels an in-progress /report (or /state) step — the
@@ -58,7 +66,14 @@ async def _run() -> None:
     # and /report resumes from the first unanswered step.
     notifier = Notifier(bot, dp.storage, settings.telegram_user_id)
     scheduler = make_scheduler(
-        session_factory, github, todoist, claude, notifier, settings.telegram_user_id, tz_manager
+        session_factory,
+        github,
+        todoist,
+        claude,
+        notifier,
+        settings.telegram_user_id,
+        tz_manager,
+        job_prefs,
     )
     scheduler.start()
 

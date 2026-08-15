@@ -7,6 +7,7 @@ Tables:
 - meds_active:     active medication protocol (persistent, archived rows kept)
 - flush_log:       what's been flushed to git (persistent)
 - user_prefs:      single-row runtime prefs — currently the timezone (persistent)
+- job_prefs:       per-cron overrides — on/off + time (persistent)
 
 SQLite is a write buffer; flush_day materialises these into the daily .md file.
 """
@@ -104,6 +105,30 @@ class UserPref(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     tz: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        server_default=func.current_timestamp(),
+        onupdate=func.current_timestamp(),
+    )
+
+
+class JobPref(Base):
+    """Per-cron override: is the job on, and at what time does it run.
+
+    A row exists only for a job the user actually touched — the code-level
+    `JobSpec` registry holds the defaults, so a missing row means "as shipped"
+    and a new job starts with its default schedule without a data migration.
+    `hour`/`minute` are stored as strings because they're fed straight to
+    `CronTrigger`, which also accepts wildcards ("*") and step syntax.
+    """
+
+    __tablename__ = "job_prefs"
+
+    job_id: Mapped[str] = mapped_column(String, primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # NULL = keep the spec's default for this field.
+    hour: Mapped[str | None] = mapped_column(String, nullable=True)
+    minute: Mapped[str | None] = mapped_column(String, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime,
         server_default=func.current_timestamp(),
