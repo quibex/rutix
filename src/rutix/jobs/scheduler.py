@@ -10,15 +10,19 @@
 - tz_sync (hourly at :07): pulls the timezone from the Todoist profile so the
   whole schedule follows the user when they travel. Silent unless it moves.
 
-Every cron below is registered in the *current* timezone rather than a fixed
-one. A `CronTrigger`'s timezone is frozen when the job is added, so a timezone
-change has to re-register them — the `on_tz_change` hook does that from the
-same `_CronJob` list used to add them, so the two can't drift apart.
+Which of them actually run, and at what time, is **not** decided here: the
+schedule above is the shipped default (`JOB_SPECS` in `jobs/job_prefs.py`), and
+`JobPrefsManager` holds the live value the user set from `/schedule`.
+
+Every cron is registered in the *current* timezone rather than a fixed one. A
+`CronTrigger`'s timezone is frozen when the job is added, so both a timezone
+change and a schedule change have to re-register the job. `apply_job` is the
+single path that does it — the initial registration, the `on_tz_change` hook
+and the `job_prefs` hook all go through it, so they can't drift apart.
 """
 
 import logging
 from collections.abc import Callable, Coroutine
-from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -33,6 +37,7 @@ from rutix.integrations.github import GitHubClient
 from rutix.integrations.todoist import TodoistClient
 from rutix.jobs.daily_plan import daily_plan_ping
 from rutix.jobs.flush_day import flush_day
+from rutix.jobs.job_prefs import JOB_SPEC_BY_ID, JobPrefsManager
 from rutix.jobs.med_reminder import catch_up_after_tz_change, med_reminder_tick
 from rutix.jobs.reschedule_overdue import RescheduleResult, reschedule_overdue
 from rutix.jobs.update_habits import UpdateHabitsResult, update_habits
@@ -42,21 +47,6 @@ from rutix.tz_manager import TimezoneManager
 logger = logging.getLogger(__name__)
 
 _MAX_MARKED_IN_MESSAGE = 15
-
-
-@dataclass(frozen=True)
-class _CronJob:
-    """A cron job's schedule, kept separate from the timezone it runs in so the
-    same spec can re-register the job when the timezone changes."""
-
-    job_id: str
-    func: Callable[..., Coroutine[Any, Any, None]]
-    hour: str | int
-    minute: str | int
-    kwargs: dict[str, Any] = field(default_factory=dict)
-
-    def trigger(self, tz: str) -> CronTrigger:
-        return CronTrigger(hour=self.hour, minute=self.minute, timezone=ZoneInfo(tz))
 
 
 def build_tz_change_message(old_tz: str, new_tz: str, now: datetime) -> str:
@@ -213,6 +203,7 @@ def make_scheduler(
     bot: Bot,
     telegram_user_id: int,
     tz_manager: TimezoneManager,
+    job_prefs: JobPrefsManager,
 ) -> AsyncIOScheduler:
     # Read through the manager on every run — `tz` is a snapshot that goes stale
     # the moment the user travels, so jobs must never close over it.
@@ -308,34 +299,61 @@ def make_scheduler(
         except Exception:
             logger.exception("tz_sync failed")
 
-    cron_jobs = [
-        _CronJob("daily_3am", daily_3am, 3, 0),
-        _CronJob("update_habits_retry_06", update_habits_retry, 6, 0, {"is_final_attempt": False}),
-        _CronJob("update_habits_retry_08", update_habits_retry, 8, 0, {"is_final_attempt": True}),
-        _CronJob("daily_plan_ping", daily_plan, 9, 0),
-        # :07 rather than :00 so the travel check doesn't land on the same
-        # minute as the hour-aligned jobs above.
-        _CronJob("tz_sync", tz_sync, "*", 7),
-        _CronJob("med_reminder_tick", med_reminder, "*", "*"),
-    ]
+    # job_id -> (coroutine, kwargs). The *schedule* of each lives in
+    # JOB_SPECS/job_prefs; this map is only "what to run". The assert keeps the
+    # two halves in sync — a spec with no implementation would silently never
+    # run, and an implementation with no spec would be unreachable from
+    # /schedule.
+    job_funcs: dict[str, tuple[Callable[..., Coroutine[Any, Any, None]], dict[str, Any]]] = {
+        "daily_3am": (daily_3am, {}),
+        "update_habits_retry_06": (update_habits_retry, {"is_final_attempt": False}),
+        "update_habits_retry_08": (update_habits_retry, {"is_final_attempt": True}),
+        "daily_plan_ping": (daily_plan, {}),
+        "tz_sync": (tz_sync, {}),
+        "med_reminder_tick": (med_reminder, {}),
+    }
+    assert set(job_funcs) == set(JOB_SPEC_BY_ID), (
+        f"job registry mismatch: {set(job_funcs) ^ set(JOB_SPEC_BY_ID)}"
+    )
 
-    for job in cron_jobs:
+    def apply_job(job_id: str) -> None:
+        """(Re-)register one cron from its current setting, or drop it if the
+        user switched it off. The only place a trigger is built, so every
+        source of change — startup, travel, /schedule — lands identically."""
+        setting = job_prefs.get(job_id)
+        if not setting.enabled:
+            if scheduler.get_job(job_id) is not None:
+                scheduler.remove_job(job_id)
+                logger.info("job %s disabled — removed from scheduler", job_id)
+            return
+        func, kwargs = job_funcs[job_id]
         scheduler.add_job(
-            job.func,
-            trigger=job.trigger(tz_now()),
-            kwargs=job.kwargs,
-            id=job.job_id,
+            func,
+            trigger=CronTrigger(
+                hour=setting.hour, minute=setting.minute, timezone=ZoneInfo(tz_now())
+            ),
+            kwargs=kwargs,
+            id=job_id,
             replace_existing=True,
         )
 
+    for job_id in job_funcs:
+        apply_job(job_id)
+
+    async def on_job_prefs_change(job_id: str) -> None:
+        apply_job(job_id)
+
+    job_prefs.subscribe(on_job_prefs_change)
+
     async def on_tz_change(old_tz: str, new_tz: str) -> None:
         # The scheduler-level timezone is only a default for triggers that omit
-        # one, and every trigger below sets it explicitly — so it needs no
+        # one, and every trigger above sets it explicitly — so it needs no
         # update here (and `scheduler.configure()` would raise anyway: it only
-        # accepts a stopped scheduler).
-        for spec in cron_jobs:
-            scheduler.reschedule_job(spec.job_id, trigger=spec.trigger(new_tz))
-        logger.info("tz: rescheduled %d cron job(s) into %s", len(cron_jobs), new_tz)
+        # accepts a stopped scheduler). `apply_job` reads the new zone through
+        # `tz_now()`.
+        for job_id in job_funcs:
+            apply_job(job_id)
+        logger.info("tz: re-registered %d cron job(s) into %s", len(job_funcs), new_tz)
 
         try:
             await bot.send_message(

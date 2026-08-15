@@ -10,6 +10,7 @@ from rutix.bot.handlers import eat as eat_handler
 from rutix.bot.handlers import meds as meds_handler
 from rutix.bot.handlers import note_done as note_done_handler
 from rutix.bot.handlers import report as report_handler
+from rutix.bot.handlers import schedule as schedule_handler
 from rutix.bot.handlers import start as start_handler
 from rutix.bot.handlers import state as state_handler
 from rutix.bot.handlers import sync as sync_handler
@@ -25,6 +26,7 @@ BOT_COMMANDS: list[BotCommand] = [
     BotCommand(command="today", description="📆 Сводка за сегодня"),
     BotCommand(command="week", description="📅 Отчёт по неделе"),
     BotCommand(command="meds", description="💊 Лекарства"),
+    BotCommand(command="schedule", description="⏰ Расписание: вкл/выкл и время джоб"),
     BotCommand(command="sync", description="🔄 Форс flush в git"),
     BotCommand(command="start", description="ℹ️ О боте"),
 ]
@@ -45,6 +47,7 @@ def build_dispatcher(allowed_user_id: int) -> Dispatcher:
     dp.include_router(today_handler.router)
     dp.include_router(week_handler.router)
     dp.include_router(meds_handler.router)
+    dp.include_router(schedule_handler.router)
     # note_done must stay LAST: its StateFilter(None) text handler is a catch-all
     # (plain text → today's Заметки) and would otherwise shadow command/state
     # handlers in the routers above.

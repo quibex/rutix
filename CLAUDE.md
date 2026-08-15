@@ -59,7 +59,16 @@ The GitHub `Contents API` writes are atomic per file: `read()` returns text + SH
 
 `/sync` is a manual trigger that calls only `flush_day` for yesterday.
 
-Cron triggers are registered in the *current* timezone and re-registered when it changes — a `CronTrigger`'s timezone is frozen at `add_job` time. `make_scheduler` builds them all from one `_CronJob` list and the `on_tz_change` hook re-points them from that same list, so the add path and the reschedule path can't drift apart.
+Cron triggers are registered in the *current* timezone and re-registered when it changes — a `CronTrigger`'s timezone is frozen at `add_job` time. `make_scheduler` keeps a single `apply_job(job_id)` that builds the trigger and adds/removes the job; startup, the `on_tz_change` hook and the `/schedule` hook all go through it, so the add path and the re-registration path can't drift apart.
+
+### The schedule is data — `/schedule` owns it, not the code
+
+The times above are **defaults**. [src/rutix/jobs/job_prefs.py](src/rutix/jobs/job_prefs.py) holds the `JOB_SPECS` registry (job_id, RU label/description, default hour/minute, `time_configurable`) and `JobPrefsManager` holds the live value: `/schedule` toggles a job on/off or moves its time, the change is written to `job_prefs` and a subscriber hook re-registers that one APScheduler job immediately — no restart.
+
+- An **absent `job_prefs` row means "the default"**, so a new job in `JOB_SPECS` needs no backfill and an untouched install behaves exactly as it did before the table existed. A row for a job_id no longer in the registry is logged and skipped.
+- `hour`/`minute` are strings end-to-end because they go straight to `CronTrigger`: that's how `tz_sync` (`*`/`7`) and `med_reminder_tick` (`*`/`*`) live in the same registry as the daily jobs. Those two are `time_configurable=False` — switchable, but "at what time" is meaningless for a poller (per-med times stay in `/meds`).
+- `make_scheduler` asserts its `job_funcs` map and `JOB_SPEC_BY_ID` have identical keys — a spec with no implementation would silently never run, an implementation with no spec would be invisible in `/schedule`. **Adding a cron means adding both.**
+- `job_prefs.load()` runs at startup before the scheduler is built, same as `tz_manager.load()`.
 
 ### Subjective day (3am boundary)
 

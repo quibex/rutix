@@ -190,6 +190,26 @@ Shows mood (from /track) + meals total (from /eat).
 Shows current meds. Tap ➕ Добавить, walk through key/name/label/dose flow.
 Verify SQLite: `docker compose exec bot sqlite3 /app/data/bot.db "SELECT * FROM meds_active;"`
 
+### /schedule
+
+```
+/schedule
+```
+
+Lists every cron job with its state and time. Tap the job to switch it off (or
+back on), tap 🕒 to move it — the change is applied to the running scheduler
+immediately and persisted in `job_prefs`, so it survives a redeploy:
+
+```
+✅ 🌅 Ночная сводка — 03:00
+✅ 🗓 План на день — 09:00
+🚫 🔁 Повтор привычек (утро) — выключено, было 06:00
+```
+
+`💊 Напоминания о лекарствах` and `🌍 Часовой пояс` are pollers (every minute /
+hourly), so they can only be switched on and off — per-med reminder times stay
+in `/meds`. Verify: `docker compose exec bot sqlite3 /app/data/bot.db "SELECT * FROM job_prefs;"`
+
 ### Habits update (manual trigger)
 
 ```bash
@@ -369,9 +389,10 @@ In Telegram with your bot:
 
 ### Updating the bot
 
-Every push to `main` deploys automatically. Cron jobs (`flush_day`,
-`update_habits`, `flush_week`) re-register on every container restart — they
-fire at 03:00 local time regardless of when you redeploy.
+Every push to `main` deploys automatically. Cron jobs re-register on every
+container restart, reading their schedule from the `job_prefs` table — so a
+time you set in `/schedule` (and any job you switched off there) survives the
+redeploy; untouched jobs fall back to the defaults in the code.
 
 ### Timezone follows you
 

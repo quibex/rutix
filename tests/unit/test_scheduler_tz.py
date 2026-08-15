@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from rutix.jobs.job_prefs import JobPrefsManager
 from rutix.jobs.scheduler import build_tz_change_message, make_scheduler
 from rutix.settings import Settings
 from rutix.tz_manager import TimezoneManager
@@ -52,6 +53,8 @@ async def _build(session, fake_bot, remote_tz=None):
     factory = _session_factory(session)
     manager = TimezoneManager(factory, Settings.model_construct(tz="Europe/Moscow"), todoist)
     await manager.load()
+    job_prefs = JobPrefsManager(factory)
+    await job_prefs.load()
 
     scheduler = make_scheduler(
         factory,
@@ -61,6 +64,7 @@ async def _build(session, fake_bot, remote_tz=None):
         fake_bot,
         telegram_user_id=1,
         tz_manager=manager,
+        job_prefs=job_prefs,
     )
     return scheduler, manager
 
