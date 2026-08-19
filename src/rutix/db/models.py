@@ -81,7 +81,8 @@ class MedActive(Base):
 
 
 class MedSnooze(Base):
-    """Deferred med reminder: fire_at is UTC datetime, med_keys is comma-separated."""
+    """Deferred med reminder: fire_at is naive local wall-clock (the tick compares
+    it against the user's local now), med_keys is comma-separated."""
 
     __tablename__ = "med_snooze"
 

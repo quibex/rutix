@@ -24,8 +24,8 @@ from rutix.jobs.med_reminder import (
     CB_PREFIX,
     build_reminder_keyboard,
     build_reminder_text,
+    fired_reminder_meds,
     parse_reminder_time,
-    pending_reminder_meds,
     schedule_snooze,
     untaken_active_meds,
 )
@@ -465,9 +465,11 @@ async def msg_snooze_minutes(
     settings: Settings,
 ):
     """If the user types a plain integer while no other flow is active, treat it
-    as a snooze request for any pending med reminders (active meds with a
-    reminder_time that aren't taken today). Schedules a one-shot re-send via
-    the MedSnooze table, which med_reminder_tick picks up each minute."""
+    as a snooze request for the med reminders already waiting on an answer —
+    active meds whose reminder_time has passed today and that aren't marked
+    taken. Meds still ahead of the clock keep their own time. Schedules a
+    one-shot re-send via the MedSnooze table, which med_reminder_tick picks up
+    each minute."""
     current_state = await state.get_state()
     if current_state is not None:
         return  # don't steal input from active /state, /report, /meds, /eat flows
@@ -479,12 +481,15 @@ async def msg_snooze_minutes(
     if not 1 <= minutes <= _MAX_SNOOZE_MINUTES:
         return
 
-    now = datetime.now(ZoneInfo(settings.tz))
+    # Floored to the minute: med_reminder_tick fires on whole minutes, so an
+    # 11:47:30 + 180 min snooze would otherwise land at 14:47:30 and only go out
+    # at 14:48 — a minute after the time we promise below.
+    now = datetime.now(ZoneInfo(settings.tz)).replace(second=0, microsecond=0)
     day = subjective_today(now, settings.tz)
     async with session_factory() as session:
-        meds = await pending_reminder_meds(session, day)
+        meds = await fired_reminder_meds(session, day, now.strftime("%H:%M"))
         if not meds:
-            return  # no active reminder pending — ignore the number silently
+            return  # no reminder waiting on an answer — ignore the number silently
         fire_at = now + timedelta(minutes=minutes)
         await schedule_snooze(session, meds, fire_at)
 

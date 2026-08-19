@@ -25,7 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from rutix.db.models import MedActive, MedicationLog, MedSnooze
-from rutix.time_utils import subjective_today
+from rutix.time_utils import subjective_day_offset, subjective_today
 
 logger = logging.getLogger(__name__)
 
@@ -132,10 +132,9 @@ def build_reminder_keyboard(day: date, meds: list[MedActive]) -> InlineKeyboardM
 
 
 async def pending_reminder_meds(session: AsyncSession, day: date) -> list[MedActive]:
-    """Active meds with a reminder_time set that aren't yet taken today.
-
-    Used by the snooze handler to decide whether an incoming number is a snooze
-    request and which meds to defer.
+    """Active meds with a reminder_time set that aren't yet taken today —
+    including ones whose time is still ahead. Callers that mean "already
+    nudged" want `fired_reminder_meds` instead.
     """
     taken_keys = set(
         (
@@ -157,9 +156,31 @@ async def pending_reminder_meds(session: AsyncSession, day: date) -> list[MedAct
     return [m for m in all_active if m.key not in taken_keys]
 
 
+async def fired_reminder_meds(session: AsyncSession, day: date, hh_mm: str) -> list[MedActive]:
+    """Pending meds whose reminder time has already come by `hh_mm` — i.e. the
+    ones the user has actually been nudged about and hasn't confirmed.
+
+    This is what a snooze applies to. Taking the whole `pending_reminder_meds`
+    list instead would drag in meds still hours ahead: typing "180" at 11:47
+    after the 08:00 pill would also re-point the 23:30 one to 14:47.
+
+    Times are ordered by `subjective_day_offset`, so at 01:30 an evening 23:30
+    reminder counts as already fired.
+    """
+    now_offset = subjective_day_offset(hh_mm)
+    return [
+        m
+        for m in await pending_reminder_meds(session, day)
+        if m.reminder_time and subjective_day_offset(m.reminder_time) <= now_offset
+    ]
+
+
 async def schedule_snooze(session: AsyncSession, meds: list[MedActive], fire_at: datetime) -> None:
+    """Store a one-shot re-send. `fire_at` is local wall-clock — `_fire_due_snoozes`
+    compares it against a naive local `now`, so an aware value is stripped here
+    rather than silently relying on the SQLite dialect dropping the offset."""
     med_keys = ",".join(m.key for m in meds)
-    session.add(MedSnooze(fire_at=fire_at, med_keys=med_keys))
+    session.add(MedSnooze(fire_at=fire_at.replace(tzinfo=None), med_keys=med_keys))
     await session.commit()
 
 
