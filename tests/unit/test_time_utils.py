@@ -7,6 +7,7 @@ from rutix.time_utils import (
     is_saturday,
     is_sunday,
     parse_hours_text,
+    subjective_day_offset,
     subjective_today,
     week_id,
     yesterday_of,
@@ -199,3 +200,21 @@ def test_parse_hours_text_rejects_more_than_a_day():
 def test_parse_hours_text_custom_max():
     assert parse_hours_text("10", max_hours=5.0) is None
     assert parse_hours_text("5", max_hours=5.0) == 5.0
+
+
+# subjective_day_offset
+
+
+def test_offset_starts_the_day_at_three_am():
+    assert subjective_day_offset("03:00") == 0
+
+
+def test_offset_orders_morning_before_evening():
+    assert subjective_day_offset("08:00") < subjective_day_offset("23:30")
+
+
+def test_offset_puts_after_midnight_last():
+    """01:30 belongs to the day that began at 03:00 the previous morning, so it
+    sorts after the evening — the opposite of a plain string compare."""
+    assert subjective_day_offset("01:30") > subjective_day_offset("23:30")
+    assert "01:30" < "23:30"

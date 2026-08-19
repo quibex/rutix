@@ -42,6 +42,18 @@ def subjective_today(now: datetime, tz: str = "Europe/Moscow") -> date:
     return local.date()
 
 
+def subjective_day_offset(hh_mm: str) -> int:
+    """Minutes from the subjective day's 03:00 start to the wall-clock `hh_mm`.
+
+    Orders wall-clock times the way the user lives them: 08:00 comes first,
+    23:30 later the same subjective day, and 01:30 — still that day — last.
+    A plain string compare would put 01:30 before 08:00.
+    """
+    h, m = hh_mm.split(":")
+    boundary = EARLY_MORNING_BOUNDARY.hour * 60 + EARLY_MORNING_BOUNDARY.minute
+    return (int(h) * 60 + int(m) - boundary) % (24 * 60)
+
+
 def yesterday_of(d: date) -> date:
     return d - timedelta(days=1)
 
