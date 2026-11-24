@@ -92,6 +92,18 @@ def render_daily_template(day: date) -> str:
     week_id = f"{iso.year}-W{iso.week:02d}"
     header = f"# {_RU_WEEKDAYS[day.weekday()]}, {day.day} {_RU_MONTHS_GENITIVE[day.month - 1]}"
     return (
+        # Frontmatter — числа дня. Его заполняет Worker life-mcp (сон/вес с Apple Watch)
+        # и Claude по отчётам; без блока Worker раньше падал (Cloudflare 1101).
+        "---\n"
+        "bed:\n"
+        "wake:\n"
+        "sleep_h:\n"
+        "nap_h:\n"
+        "weight:\n"
+        "english_h:\n"
+        "vpn_h:\n"
+        "mood:\n"
+        "---\n"
         f"{header}\n"
         "\n"
         f"[[{week_id}|← Неделя {iso.week}]]\n"
