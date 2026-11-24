@@ -417,3 +417,14 @@ def test_parse_day_plan_skips_empty_placeholder():
 
 def test_parse_day_plan_missing_section_returns_empty():
     assert parse_day_plan("## Сон\n") == []
+
+
+def test_render_daily_template_has_frontmatter():
+    # Worker life-mcp пишет сон/вес во frontmatter — без блока он падал с 1101.
+    from datetime import date
+
+    from rutix.markdown.daily import render_daily_template
+
+    text = render_daily_template(date(2026, 11, 24))
+    assert text.startswith("---\nbed:\nwake:\nsleep_h:\nnap_h:\n")
+    assert "\n---\n# Вторник, 24 ноября\n" in text
